@@ -157,8 +157,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .deck-pile[data-tier="stage3"]{background-image:linear-gradient(rgba(8,10,30,.40),rgba(8,10,30,.62)),url(../assets/backs/stage3.jpg)}
 .deck-pile[data-tier="rare"]{background-image:linear-gradient(rgba(8,10,30,.40),rgba(8,10,30,.62)),url(../assets/backs/rare.jpg)}
 .deck-pile[data-tier="legend"]{background-image:linear-gradient(rgba(8,10,30,.40),rgba(8,10,30,.62)),url(../assets/backs/legend.jpg)}
-/* Pokémart has no TTS back → CSS-generated green "shop" back (layered gradients for depth) */
-.deck-pile[data-tier="pmL1"],.deck-pile[data-tier="pmL2"],.deck-pile[data-tier="pmL3"]{background-image:linear-gradient(135deg,rgba(46,209,122,.25),rgba(76,175,80,.15) 50%,rgba(46,209,122,.20)),radial-gradient(circle at 30% 70%,rgba(76,175,80,.10),transparent 60%),linear-gradient(160deg,#0d3a1a,#1a5c2a 40%,#0f4620)}
+/* PokéMart uses a distinct supplied back for each shop level. */
+.deck-pile[data-tier="pmL1"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-1.png)}
+.deck-pile[data-tier="pmL2"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-2.png)}
+.deck-pile[data-tier="pmL3"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-3.png)}
 /* count → small corner badge so the back art reads (min-width fits 2-digit counts like 35) */
 .deck-pile .count{position:absolute;top:6px;right:7px;font-weight:800;font-size:13px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.85);background:rgba(0,0,0,.5);border-radius:8px;min-width:24px;height:23px;display:flex;align-items:center;justify-content:center;padding:0 5px;z-index:2}
 .deck-pile.reservable{cursor:pointer;border-style:solid}
@@ -460,7 +462,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .fly-card[data-tier="stage3"]{background-image:linear-gradient(rgba(8,10,30,.45),rgba(8,10,30,.6)),url(../assets/backs/stage3.jpg)}
 .fly-card[data-tier="rare"]{background-image:linear-gradient(rgba(8,10,30,.45),rgba(8,10,30,.6)),url(../assets/backs/rare.jpg)}
 .fly-card[data-tier="legend"]{background-image:linear-gradient(rgba(8,10,30,.45),rgba(8,10,30,.6)),url(../assets/backs/legend.jpg)}
-.fly-card[data-tier="pmL1"],.fly-card[data-tier="pmL2"],.fly-card[data-tier="pmL3"]{background-image:linear-gradient(135deg,rgba(46,209,122,.28),rgba(76,175,80,.18) 50%,rgba(46,209,122,.23)),linear-gradient(160deg,#0d3a1a,#1a5c2a 40%,#0f4620)}
+.fly-card[data-tier="pmL1"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-1.png)}
+.fly-card[data-tier="pmL2"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-2.png)}
+.fly-card[data-tier="pmL3"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-3.png)}
 @keyframes recv{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
 .player.receiving{animation:recv .5s ease}
 
@@ -472,16 +476,23 @@ button:disabled{opacity:.45;cursor:not-allowed}
 @media (max-width:860px){ #undo-btn{bottom:calc(var(--dock-h) + var(--sa-b) + 10px)} }
 
 /* ===== Pokémart expansion ===== */
-.tier-pokemart{background:linear-gradient(90deg,rgba(46,209,122,.16),rgba(47,111,214,.10))}
-.tier-pokemart .tier-label{color:#46d17a}
+.pokemart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0 8px;padding:12px 15px;border:1px solid rgba(75,211,153,.32);border-radius:16px;background:linear-gradient(110deg,rgba(24,111,77,.42),rgba(29,65,116,.24));box-shadow:inset 0 1px rgba(255,255,255,.06)}
+.pokemart-brand{display:flex;align-items:center;gap:10px}.pokemart-brand strong{display:block;color:#7cf0b2;font-size:18px;letter-spacing:.02em}.pokemart-brand span{display:block;color:var(--muted);font-size:11px;margin-top:1px}.pokemart-brand .pokemart-bag{font-size:25px;margin:0}
+.pokemart-legend{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px;white-space:nowrap}.pm-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-left:5px}.pm-dot.ready{background:#5be091;box-shadow:0 0 7px #5be091}.pm-dot.wild{background:#b884ff}.pm-dot.locked{background:#697186}
+.tier-pokemart{position:relative;background:linear-gradient(90deg,rgba(46,209,122,.13),rgba(47,111,214,.08));border-color:rgba(75,211,153,.2)}
+.tier-pokemart .tier-label{color:#65dfa0;display:flex;flex-direction:column;line-height:1.05}.tier-pokemart .tier-label strong{font-size:13px}.tier-pokemart .tier-label span{font-size:8px;color:var(--muted);margin-top:4px;white-space:nowrap}
+.tier-pokemart .card{transition:transform .16s ease,filter .16s ease,box-shadow .16s ease}.tier-pokemart .card.affordable{box-shadow:0 0 0 2px rgba(91,224,145,.75),0 5px 18px rgba(40,190,110,.2)}
 .eff-tag{color:var(--gold);font-size:12px;font-weight:700}
-.choice-title{font-size:18px;font-weight:800;color:var(--gold);margin-bottom:4px}
-.choice-hint{color:var(--muted);font-size:13px;margin-bottom:14px}
+.modal-box.choice{max-width:760px;border-color:rgba(244,192,37,.28)}
+.choice-title{font-size:20px;font-weight:800;color:var(--gold);margin-bottom:5px}
+.choice-meta{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.choice-hint{color:var(--muted);font-size:13px}.choice-progress{flex:none;padding:4px 9px;border-radius:999px;background:rgba(255,255,255,.07);color:var(--muted);font-size:12px;font-weight:700}.choice-progress.complete{color:#75e9aa;background:rgba(55,190,118,.14)}
 .choice-cards{display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow:auto;justify-content:center}
-.choice-card{width:96px;border:2px solid transparent;border-radius:10px;cursor:pointer;padding:4px;background:rgba(255,255,255,.04);transition:border-color .12s,transform .12s;text-align:center}
+.choice-card{width:104px;border:2px solid transparent;border-radius:12px;cursor:pointer;padding:5px;background:rgba(255,255,255,.04);transition:border-color .12s,transform .12s,background .12s;text-align:center;touch-action:manipulation}
 .choice-card img{width:100%;border-radius:7px;display:block}
 .choice-card span{display:block;font-size:11px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .choice-card:hover{transform:translateY(-2px)}
 .choice-card.sel{border-color:var(--gold);box-shadow:0 0 10px rgba(244,192,37,.5)}
+.choice-card:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .choice-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
 .choice-confirm:disabled,#choice-confirm:disabled{opacity:.4;cursor:not-allowed}
+@media(max-width:640px){.pokemart-head{align-items:flex-start}.pokemart-legend{white-space:normal;justify-content:flex-end;flex-wrap:wrap}.choice-card{width:88px}.choice-meta{flex-direction:column}.choice-actions{position:sticky;bottom:-18px;background:linear-gradient(transparent,var(--bg1) 25%);padding-top:18px}.choice-actions button{min-height:46px;flex:1}}

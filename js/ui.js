@@ -10,7 +10,7 @@
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const BALL_NAMES = { red: '精灵球', blue: '超级球', black: '高级球', pink: '治愈球', yellow: '先机球', purple: '大师球' };
   const TIER_NAMES = { legend: '传说', rare: '稀有', stage3: '三阶', stage2: '二阶', stage1: '一阶', mega: 'Mega', pmL1: '商店Ⅰ', pmL2: '商店Ⅱ', pmL3: '商店Ⅲ' };
-  const EFFECT_NAMES = { copy: '进化石·关联', colorless_master: '图鉴·可抵2万能', double: '药水·双奖励', copy_free: '神奇糖果·关联+免费取卡', free: '技能机·免费取卡', discard_buy: '驱虫·弃2张同色购买' };
+  const EFFECT_NAMES = { copy: '技能机·复制折扣', colorless_master: '图鉴·可抵2万能', double: '药水·双折扣', copy_free: '神奇糖果·复制+免费取一级', free: '进化石·免费取二级', discard_buy: '驱虫·弃2张同色购买' };
   const SEAT_COLORS = ['#e3350d', '#2f6fd6', '#46d17a', '#f4c025'];
   // per-seat trainer avatars (head/bust crops of the TTS trainer figurines)
   const SEAT_AVATARS = ['ash', 'misty', 'brock', 'rocket'];
@@ -407,12 +407,18 @@
     }
     // Pokémart expansion: 2 shop cards per level, shown high→low like the base rows.
     if (G.pokemartEnabled) {
+      const shopHead = document.createElement('div');
+      shopHead.className = 'pokemart-head';
+      shopHead.innerHTML = `<div class="pokemart-brand"><span class="pokemart-bag" aria-hidden="true">🛍️</span><div><strong>PokéMart</strong><span>宝可梦商店扩展</span></div></div>
+        <div class="pokemart-legend" aria-label="商店卡牌状态"><span class="pm-dot ready"></span>可获得 <span class="pm-dot wild"></span>需万能球 <span class="pm-dot locked"></span>当前不可获得</div>`;
+      wrap.appendChild(shopHead);
       for (const tier of ['pmL3', 'pmL2', 'pmL1']) {
         const rowEl = document.createElement('div');
         rowEl.className = 'tier-row tier-pokemart';
         const deckN = G.decks[tier].length;
         const canReserveDeck = human && UI.phase === 'main' && deckN > 0 && me().reserve.length < E.HAND_MAX && !G.acted;
-        let inner = `<div class="tier-label">${TIER_NAMES[tier]}</div>`;
+        const level = tier.slice(-1);
+        let inner = `<div class="tier-label"><strong>Lv.${level}</strong><span>${level === '3' ? '高级道具' : level === '2' ? '进阶道具' : '基础道具'}</span></div>`;
         inner += `<div class="deck-pile ${canReserveDeck ? 'reservable' : ''}" data-tier="${tier}" ${canReserveDeck ? `data-deck="${tier}"` : ''}>
                     <div class="count">${deckN}</div><div class="deck-tag">商店牌堆</div></div>`;
         inner += '<div class="card-strip">';
@@ -814,31 +820,44 @@
       const modal = $('#choice-modal'), confirm = $('#choice-confirm'), cancel = $('#choice-cancel');
       $('#choice-title').textContent = o.title;
       $('#choice-hint').textContent = o.hint || '';
+      const progress = $('#choice-progress');
       const wrap = $('#choice-cards'); wrap.innerHTML = '';
       const count = o.count, sel = [];
+      const update = () => {
+        confirm.disabled = sel.length !== count;
+        progress.textContent = `已选 ${sel.length} / ${count}`;
+        progress.classList.toggle('complete', sel.length === count);
+      };
       (o.candidates || []).forEach((id) => {
         const c = byId[id];
         const el = document.createElement('div');
         el.className = 'choice-card'; el.dataset.id = id; el.dataset.zoom = c.img;
+        el.tabIndex = 0; el.setAttribute('role', 'checkbox'); el.setAttribute('aria-checked', 'false');
         el.innerHTML = `<img src="${c.img}" alt="${c.name}"><span>${c.name}</span>`;
-        el.addEventListener('click', () => {
+        const toggle = () => {
           const i = sel.indexOf(id);
           if (i >= 0) { sel.splice(i, 1); el.classList.remove('sel'); }
           else {
-            if (count === 1) { sel.length = 0; wrap.querySelectorAll('.choice-card').forEach(x => x.classList.remove('sel')); }
+            if (count === 1) { sel.length = 0; wrap.querySelectorAll('.choice-card').forEach(x => { x.classList.remove('sel'); x.setAttribute('aria-checked', 'false'); }); }
             else if (sel.length >= count) return;
             sel.push(id); el.classList.add('sel');
           }
-          confirm.disabled = sel.length !== count;
-        });
+          el.setAttribute('aria-checked', String(sel.includes(id)));
+          update();
+        };
+        el.addEventListener('click', toggle);
+        el.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(); } });
         wrap.appendChild(el);
       });
-      confirm.disabled = sel.length !== count;
-      const close = (val) => { modal.classList.add('hidden'); confirm.removeEventListener('click', ok); cancel.removeEventListener('click', no); resolve(val); };
+      update();
+      const onKey = (e) => { if (e.key === 'Escape') no(); if (e.key === 'Enter' && !confirm.disabled) ok(); };
+      const close = (val) => { modal.classList.add('hidden'); confirm.removeEventListener('click', ok); cancel.removeEventListener('click', no); document.removeEventListener('keydown', onKey); resolve(val); };
       const ok = () => { if (sel.length === count) close(sel.slice()); };
       const no = () => close(null);
       confirm.addEventListener('click', ok); cancel.addEventListener('click', no);
       modal.classList.remove('hidden');
+      document.addEventListener('keydown', onKey);
+      cancel.focus();
     });
   }
   async function gatherCaptureOpts(card) {
@@ -1189,6 +1208,7 @@
     if ($('#lobby-copy')) $('#lobby-copy').addEventListener('click', () => { try { navigator.clipboard.writeText(location.href); flashHint('邀请链接已复制'); } catch (e) { flashHint(location.href); } });
     if ($('#tutorial-btn')) $('#tutorial-btn').addEventListener('click', () => { if (window.Tutorial) Tutorial.start('base'); });
     if ($('#tutorial-mega-btn')) $('#tutorial-mega-btn').addEventListener('click', () => { if (window.Tutorial) Tutorial.start('megas'); });
+    if ($('#tutorial-pokemart-btn')) $('#tutorial-pokemart-btn').addEventListener('click', () => { if (window.Tutorial) Tutorial.start('pokemart'); });
     $('#undo-btn').addEventListener('click', doUndo);
     $('#rules-btn').addEventListener('click', () => $('#rules-modal').classList.remove('hidden'));
     $('#rules-modal').addEventListener('click', (e) => { if (e.target.id === 'rules-modal' || e.target.classList.contains('close-rules')) $('#rules-modal').classList.add('hidden'); });
@@ -1271,7 +1291,7 @@
 
   // public surface used by the tutorial (js/tutorial.js)
   window.PSGame = {
-    E, AI, byId, MEGA_DB,
+    E, AI, byId, MEGA_DB, POKEMART_DB,
     get DB() { return DB; },
     get G() { return G; },
     get UI() { return UI; },

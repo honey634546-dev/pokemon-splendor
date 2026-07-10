@@ -22,7 +22,9 @@
     }
   }
   function placeField(g, tier, slot, id) { purge(g, id); g.field[tier][slot] = id; }
+  function placeOnly(g, tier, id) { g.field[tier].fill(null); placeField(g, tier, 0, id); }
   function give(g, id) { purge(g, id); P(g).board.push(id); }
+  function setBoard(g, ids) { P(g).board = []; P(g).buried = []; P(g).assoc = {}; ids.forEach(id => give(g, id)); }
   function setTokens(g, obj) {
     const p = P(g);
     p.tokens = { red: 0, blue: 0, black: 0, pink: 0, yellow: 0, purple: 0 };
@@ -47,6 +49,12 @@
     const g = E.createGame(PS.DB, { numPlayers: 1, names: ['你'], ai: [false], megas: true, megaDB: PS.MEGA_DB, winScore: 999 });
     give(g, 's3_01');                          // 耿鬼 → 超级耿鬼 (mg_01)
     setTokens(g, { red: 3 });                  // afford 超级耿鬼 (cost 3red)
+    return g;
+  }
+  function buildPokemart() {
+    const g = E.createGame(PS.DB, { numPlayers: 1, names: ['你'], ai: [false], pokemart: true, pokemartDB: PS.POKEMART_DB, winScore: 999 });
+    give(g, 's1_14');                          // one real pink bonus for copy lessons
+    setTokens(g, {});
     return g;
   }
 
@@ -130,6 +138,61 @@
     },
   ];
 
+  const pokemartSteps = [
+    {
+      title: '欢迎光临 PokéMart 🛒',
+      html: 'PokéMart 是一套可选的<b>商店扩展</b>：每个等级额外翻开 2 张道具卡，购买也算你这回合的主行动。<br><br>商店分为 <b>Lv.1 基础道具</b>、<b>Lv.2 进阶道具</b>、<b>Lv.3 高级道具</b>。道具与宝可梦一样可以得分、提供折扣，但还会触发特殊效果。',
+      target: '.pokemart-head', next: true,
+    },
+    {
+      title: '① 药水：一张抵两张',
+      html: '<b>药水</b>会提供 <b>2 个同色永久折扣</b>，是快速发展经济的核心道具。<br>我已准备好刚好足够的球。👇 点高亮的<b>药水</b>，然后点「获得」。',
+      arrange: (g) => { placeOnly(g, 'pmL2', 'pm_12'); setTokens(g, { blue: 4, pink: 3 }); },
+      target: () => document.querySelector('.card[data-card="pm_12"]'),
+      detect: (g) => P(g).board.includes('pm_12'),
+    },
+    {
+      title: '② 技能机：复制一种折扣',
+      html: '<b>技能机</b>没有固定颜色。获得时选择你已拥有的一张彩色卡，它就永久复制那种折扣。<br>👇 获得<b>技能机</b>，在弹窗中选一张关联卡。',
+      arrange: (g) => { placeOnly(g, 'pmL1', 'pm_23'); setTokens(g, { red: 3, blue: 2 }); },
+      target: () => document.querySelector('.card[data-card="pm_23"]'),
+      detect: (g) => P(g).board.includes('pm_23') && !!P(g).assoc.pm_23,
+    },
+    {
+      title: '③ 图鉴：需要时再抵款',
+      html: '<b>图鉴</b>平时不给颜色折扣，但购买其他卡时可丢弃，当作 <b>2 个万能球</b>。<br>你已拥有一张图鉴，现在少 2 个红球。👇 获得高亮的<b>蚊香蝌蚪</b>，并确认弃用图鉴抵款。',
+      arrange: (g) => { setBoard(g, ['s1_14', 'pm_06']); placeOnly(g, 'stage1', 's1_21'); setTokens(g, { red: 1 }); },
+      target: () => document.querySelector('.card[data-card="s1_21"]'),
+      detect: (g) => P(g).board.includes('s1_21') && !P(g).board.includes('pm_06'),
+    },
+    {
+      title: '④ 神奇糖果：一次做两件事',
+      html: '<b>神奇糖果</b>同时有两个效果：① 复制你已有的一种折扣；② 立即免费拿一张场上的 <b>Lv.1 道具或一级宝可梦</b>。<br>👇 获得神奇糖果，按顺序完成两次选择。',
+      arrange: (g) => { setBoard(g, ['s1_14']); placeOnly(g, 'pmL2', 'pm_18'); g.field.pmL1.fill(null); placeOnly(g, 'stage1', 's1_07'); setTokens(g, { red: 1, blue: 4, black: 3 }); },
+      target: () => document.querySelector('.card[data-card="pm_18"]'),
+      detect: (g) => P(g).board.includes('pm_18'),
+    },
+    {
+      title: '⑤ 进化石：免费拿二级卡',
+      html: '<b>进化石</b>会让你立即免费拿一张场上的 <b>Lv.2 道具或二级宝可梦</b>。免费卡的效果也会继续触发。<br>👇 获得<b>进化石</b>，再选一张免费卡。',
+      arrange: (g) => { placeOnly(g, 'pmL3', 'pm_02'); placeOnly(g, 'pmL2', 'pm_11'); g.field.stage2.fill(null); setTokens(g, { blue: 1, black: 6, pink: 3 }); },
+      target: () => document.querySelector('.card[data-card="pm_02"]'),
+      detect: (g) => P(g).board.includes('pm_02'),
+    },
+    {
+      title: '⑥ 驱虫喷雾：弃卡换高分',
+      html: '<b>驱虫喷雾</b>不花精灵球，而是弃掉指定颜色的 <b>2 张已拥有卡</b>，换取 3 分。会牺牲长期折扣，适合冲分收尾。<br>我已给你两张粉色卡。👇 获得高亮的<b>驱虫喷雾</b>，在弹窗中选两张作为代价。',
+      arrange: (g) => { setBoard(g, ['s1_14', 's1_20']); placeOnly(g, 'pmL3', 'pm_28'); setTokens(g, {}); },
+      target: () => document.querySelector('.card[data-card="pm_28"]'),
+      detect: (g) => P(g).board.includes('pm_28'),
+    },
+    {
+      title: '商店策略课 🎯',
+      html: '你已学会全部 6 种道具！<br><br><b>前期</b>：药水、技能机建立折扣。<br><b>中期</b>：神奇糖果、进化石连锁拿卡。<br><b>关键回合</b>：图鉴补费用缺口。<br><b>收尾</b>：驱虫喷雾牺牲折扣换 3 分。<br><br>正式开局时，在设置页勾选 <b>PokéMart</b> 即可启用。',
+      next: true,
+    },
+  ];
+
   // ---------------------------------------------------------------- coach overlay
   function ensureDOM() {
     if (document.getElementById('tut-bubble')) return;
@@ -192,13 +255,15 @@
     const wm = document.getElementById('win-modal'); if (wm) wm.classList.add('hidden');
     const b = document.getElementById('tut-bubble'); if (!b) return;
     document.getElementById('tut-step').textContent = '教程完成';
-    document.getElementById('tut-title').innerHTML = curMode === 'megas' ? '⚡ 学会超级进化！' : '🏆 恭喜通关！';
+    document.getElementById('tut-title').innerHTML = curMode === 'megas' ? '⚡ 学会超级进化！' : curMode === 'pokemart' ? '🛒 PokéMart 毕业！' : '🏆 恭喜通关！';
     document.getElementById('tut-text').innerHTML = curMode === 'megas'
       ? '耿鬼超级进化成了 <b>超级耿鬼</b>！<br>正式的超级进化对局：达到 <b>20 分 + 集齐 5 种颜色折扣 + 至少 1 只 Mega</b> 即获胜。去挑战吧！'
+      : curMode === 'pokemart'
+      ? '你已亲手操作了<b>药水、技能机、图鉴、神奇糖果、进化石和驱虫喷雾</b>。<br>现在可以开一局 PokéMart 扩展对局了！'
       : '你已经体验了 <b>拿球、捕捉、保留、进化</b>，并赢得了比赛！这就是游戏的核心循环。<br>现在去开始一局真正的对局，挑战电脑或朋友吧（正式对局先到 <b>18 分</b> 者胜）。';
     const acts = document.getElementById('tut-actions'); acts.innerHTML = '';
     const go = document.createElement('button'); go.className = 'primary'; go.textContent = '开始一局对局'; go.onclick = exit; acts.appendChild(go);
-    if (curMode !== 'megas') { const ag = document.createElement('button'); ag.className = 'ghost small'; ag.textContent = '再练一次'; ag.onclick = () => start('base'); acts.appendChild(ag); }
+    if (curMode !== 'megas') { const ag = document.createElement('button'); ag.className = 'ghost small'; ag.textContent = '再练一次'; ag.onclick = () => start(curMode); acts.appendChild(ag); }
     b.classList.remove('hidden');
   }
 
@@ -217,13 +282,17 @@
   function start(mode) {
     stop();
     ensureDOM();
-    curMode = (mode === 'megas') ? 'megas' : 'base';
+    curMode = mode === 'megas' ? 'megas' : mode === 'pokemart' ? 'pokemart' : 'base';
     if (curMode === 'megas' && (!PS.MEGA_DB || !PS.MEGA_DB.length)) {   // mega tutorial needs the Megas data loaded
       alert('超级进化扩展未加载，暂时无法开始该教程。');
       return;
     }
-    const g = curMode === 'megas' ? buildMega() : buildBase();
-    steps = curMode === 'megas' ? megaSteps : baseSteps;
+    if (curMode === 'pokemart' && (!PS.POKEMART_DB || !PS.POKEMART_DB.length)) {
+      alert('PokéMart 扩展未加载，暂时无法开始该教程。');
+      return;
+    }
+    const g = curMode === 'megas' ? buildMega() : curMode === 'pokemart' ? buildPokemart() : buildBase();
+    steps = curMode === 'megas' ? megaSteps : curMode === 'pokemart' ? pokemartSteps : baseSteps;
     idx = 0; ctx = null; active = true;
     addListeners();
     PS.enterGame(g, { humans: 1, hasAI: false });
