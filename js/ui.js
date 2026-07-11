@@ -892,7 +892,7 @@
         const owned = me().board.includes(id);
         const color = owned ? E.effBonusColor(G, me(), id) : (c.bonus && c.bonus !== 'none' ? c.bonus : null);
         const el = document.createElement('div');
-        el.className = 'choice-card'; el.dataset.id = id; el.dataset.zoom = c.img;
+        el.className = 'choice-card' + (E.isPokemart(c) ? ' pm-choice' : ''); el.dataset.id = id; el.dataset.zoom = c.img;
         el.tabIndex = 0; el.setAttribute('role', 'checkbox'); el.setAttribute('aria-checked', 'false');
         el.innerHTML = `<img src="${c.img}" alt=""><span>${c.name}</span><small>${TIER_NAMES[c.tier]} · ${c.vp}分${color ? ` · ${BALL_NAMES[color]}奖励` : ''}</small>`;
         const toggle = () => {

@@ -180,7 +180,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 /* card */
 .card{width:var(--card-w);height:var(--card-h);border-radius:9px;overflow:hidden;position:relative;flex:none;cursor:pointer;background:#0c1030;border:2px solid transparent;box-shadow:0 3px 8px rgba(0,0,0,.4);transition:.12s transform,.12s box-shadow}
 .card.pm-card,.tier-pokemart .deck-pile{height:calc(var(--card-w) * 1.545)}
-.card.pm-card img{object-fit:contain;background:#0c1030}
+.card.pm-card img{object-fit:cover;object-position:center;background:#61c9dc}
 .card.pm-card.pm-locked:not(.selected){filter:saturate(.72) brightness(.86)}
 .card img{width:100%;height:100%;display:block;object-fit:cover}
 .card.affordable{border-color:var(--good);box-shadow:0 0 0 2px rgba(70,209,122,.5),0 6px 14px rgba(0,0,0,.4)}
@@ -245,7 +245,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 @media (hover:hover) and (pointer:fine){ .evo-option:hover{border-color:var(--gold)} }
 /* selected-card preview inside the action bar (read the card while you act) */
 .sel-preview{float:right;width:calc(var(--card-w) * 1.5);height:auto;aspect-ratio:3/4;border-radius:9px;border:2px solid var(--gold);margin:0 0 6px 10px;box-shadow:0 4px 12px rgba(0,0,0,.5);cursor:zoom-in}
-.sel-preview.pm-card{aspect-ratio:auto;object-fit:contain}
+.sel-preview.pm-card{aspect-ratio:647/1000;object-fit:cover;object-position:center;background:#61c9dc}
 
 /* ---------- purchase ledger (payment breakdown when a card is selected) ---------- */
 .pay-ledger{clear:both;margin:6px 0 8px;background:#11163a;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
@@ -351,7 +351,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .color-stack .ministack{display:flex;flex-direction:column}
 .mini-card{width:42px;height:56px;border-radius:5px;overflow:hidden;border:1px solid #000;box-shadow:0 1px 3px rgba(0,0,0,.5);cursor:pointer}
 .mini-card img{width:100%;height:100%;object-fit:cover}
-.mini-card.pm-mini img{object-fit:contain;background:#0c1030}
+.mini-card.pm-mini img{object-fit:cover;object-position:center;background:#61c9dc}
 .mini-card.stacked{margin-top:-44px}
 /* face-down reserve backs: tier-correct art for base and PokéMart cards */
 .mini-card.card-back{background:linear-gradient(135deg,#3a2a6e,#221a4a) center/cover no-repeat}
@@ -514,6 +514,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .choice-cards{display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow:auto;justify-content:center}
 .choice-card{width:104px;border:2px solid transparent;border-radius:12px;cursor:pointer;padding:5px;background:rgba(255,255,255,.04);transition:border-color .12s,transform .12s,background .12s;text-align:center;touch-action:manipulation}
 .choice-card img{width:100%;border-radius:7px;display:block}
+.choice-card.pm-choice img{aspect-ratio:647/1000;object-fit:cover;object-position:center;background:#61c9dc}
 .choice-card span{display:block;font-size:11px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .choice-card small{display:block;font-size:9px;line-height:1.35;color:var(--muted);margin-top:2px}
 .choice-card:hover{transform:translateY(-2px)}
