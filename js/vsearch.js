@@ -59,8 +59,9 @@
 
   function actionKey(a) {
     if (a.type === 'take') return 't' + a.colors.slice().sort().join('');
-    if (a.type === 'capture') return 'c' + a.cardId;
+    if (a.type === 'capture') return 'c' + a.cardId + JSON.stringify(a.opts || {});
     if (a.type === 'reserve') return 'r' + (a.target.fromField || ('d' + a.target.fromDeck));
+    if (a.type === 'takeMega') return 'm';
     return 'p';
   }
 
@@ -68,7 +69,7 @@
   // node-prior Q-init per action = the side-to-move's static eval margin at that child, in [-1,1]
   // (reuses the same clone+autoStep we already do for the prior; +1 opponent eval per action).
   function priorAndQ(s) {
-    const acts = E.legalActions(s), me = s.turn, np = s.numPlayers;
+    const acts = (AI && AI.legalActions ? AI.legalActions(s) : E.legalActions(s)), me = s.turn, np = s.numPlayers;
     if (!acts.length) return { acts: acts, P: null, Q0: null };
     const ev = new Float64Array(acts.length);
     const Q0 = new Float64Array(acts.length);
@@ -116,7 +117,7 @@
   function endgameVec(s) {
     const c = E.clone(s); let guard = 0;
     while (c.phase !== 'gameover' && guard++ < 16) {
-      const acts = E.legalActions(c);
+      const acts = AI && AI.legalActions ? AI.legalActions(c) : E.legalActions(c);
       if (!acts.length) { autoStep(c, null); continue; }
       const meNow = c.turn; let best = acts[0], bs = -1e18;
       for (let i = 0; i < acts.length; i++) {
@@ -153,6 +154,14 @@
     const path = []; let n = root, vVec;
     while (true) {
       if (n.over) { vVec = terminalVec(n.s); break; }
+      // A non-terminal node can legitimately have no normal action.  Passing is
+      // then forced by the engine; resolve it instead of selecting index 0 from
+      // an empty action list (which previously crashed actionKey(undefined)).
+      if (n.expanded && (!n.acts || !n.acts.length)) {
+        const c = E.clone(n.s); autoStep(c, null);
+        vVec = c.phase === 'gameover' ? terminalVec(c) : ((ENDGAME && c.lastRound) ? endgameVec(c) : leafVec(c));
+        break;
+      }
       const bi = select(n); const a = n.acts[bi]; path.push([n, bi]);
       const key = actionKey(a); let ch = n.children[key];
       if (!ch) {
@@ -168,10 +177,10 @@
       nn.N[bi] += 1; nn.W[bi] += vVec[nn.turn];
     }
   }
-  function determinize(s) {
-    for (const t of FIELD_TIERS) {
+  function determinize(s, rng) {
+    for (const t of (E.fieldTiers ? E.fieldTiers(s) : FIELD_TIERS)) {
       const d = s.decks[t];
-      for (let i = d.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const tmp = d[i]; d[i] = d[j]; d[j] = tmp; }
+      for (let i = d.length - 1; i > 0; i--) { const j = (rng() * (i + 1)) | 0; const tmp = d[i]; d[i] = d[j]; d[j] = tmp; }
     }
   }
 
@@ -184,8 +193,21 @@
     ENDGAME = !!cfg.endgame;
     const agg = {}, byKey = {};
     const per = Math.max(1, (sims / dets) | 0);
+    // Search must be reproducible: derive an isolated RNG stream from the public
+    // game position instead of using Math.random().  Callers may override it with
+    // searchSeed for benchmark manifests, but identical positions are stable by
+    // default as well.  A distinct stream per determinization avoids coupling to
+    // simulation count or execution order.
+    const baseSeed = cfg.searchSeed != null ? (cfg.searchSeed >>> 0) : (
+      AI && AI.publicHash ? AI.publicHash(G, G.turn, 0x9e3779b9) : (
+        Math.imul(((G.round || 0) + 1) >>> 0, 0x85ebca6b) ^
+        Math.imul(((G.turn || 0) + 1) >>> 0, 0xc2b2ae35)
+      )
+    ) >>> 0;
     for (let d = 0; d < dets; d++) {
-      const s = E.clone(G); determinize(s);
+      const sampleSeed = (baseSeed + Math.imul(d + 1, 0x6d2b79f5)) >>> 0;
+      const s = AI && AI.beliefState ? AI.beliefState(G, G.turn, sampleSeed) : E.clone(G);
+      if (!(AI && AI.beliefState)) determinize(s, E.makeRng(sampleSeed));
       const root = mkNode(s); expand(root);
       if (!root.acts || !root.acts.length) return null;
       if (root.acts.length === 1) return root.acts[0];
@@ -204,12 +226,18 @@
   // REAL state with the heuristic's own manager (so the applied plan matches what the search modeled).
   function chooseTurn(G, opts) {
     opts = opts || {};
+    // PokéMart can create dozens of semantically distinct copy/free/discard
+    // branches.  On extreme positions, expanding all of them at every MCTS node
+    // can freeze the browser for seconds; use the complete 1-ply planner as an
+    // adaptive beam fallback while keeping normal Ultra positions unchanged.
+    if (opts.adaptive !== false && AI && AI.legalActions && AI.legalActions(G).length > 44)
+      return AI.chooseTurn(G, { difficulty: 'hard', beliefs: 2 });
     const a = move(G, opts);
     if (!a) return { action: null, discards: [], evolution: null };
     const c = E.clone(G); E.applyAction(c, a);
     if (AI && typeof AI.manage === 'function') {
       const plan = AI.manage(c, HARD);
-      return { action: a, discards: plan.discards || [], evolution: plan.evolution || null };
+      return { action: a, discards: plan.discards || [], evolution: plan.evolution || null, megaEvolution: plan.megaEvolution || null };
     }
     const me = c.players[c.turn]; const discards = []; let guard = 0;
     while (E.needsDiscard(c, me) && guard++ < 24) {

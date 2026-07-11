@@ -191,24 +191,44 @@
     }
   }
   // Reconstruct a plausible FULL state from our redacted view so the AI can run:
-  // fill the hidden deck with unseen cards, drop the hidden (stub) reserves. The AI
+  // sample unseen deck cards and hidden reserve identities together by tier while
   // therefore plays from PUBLIC info only — it never sees a player's hidden hand.
   function determinizeForAI(s) {
     const d = E.clone(s);
     const seen = new Set();
     for (const t in d.field) for (const id of (d.field[t] || [])) if (id) seen.add(id);
     for (const id of (d.megaOffer || [])) seen.add(id);
-    d.players.forEach(p => {
+    const hidden = {};
+    d.players.forEach((p, seat) => {
       (p.board || []).forEach(id => seen.add(id));
       (p.buried || []).forEach(id => seen.add(id));
-      p.reserve = (p.reserve || []).filter(rid => typeof rid === 'string'); // drop {hidden,tier} stubs
-      p.reserve.forEach(id => seen.add(id));
+      (p.reserve || []).forEach((rid, slot) => {
+        if (typeof rid === 'string') seen.add(rid);
+        else if (rid && rid.tier) (hidden[rid.tier] = hidden[rid.tier] || []).push([seat, slot]);
+      });
     });
     const pools = {};
-    [].concat(DB, MEGA_DB, POKEMART_DB).forEach(c => { if (c && !seen.has(c.id)) (pools[c.tier] = pools[c.tier] || []).push(c.id); });
+    const canonicalSpecial = new Set([].concat(
+      (E.CANON_SPECIAL && E.CANON_SPECIAL.rare) || [],
+      (E.CANON_SPECIAL && E.CANON_SPECIAL.legend) || []
+    ));
+    [].concat(DB, MEGA_DB, POKEMART_DB).forEach(c => {
+      if (!c || seen.has(c.id)) return;
+      if ((c.tier === 'rare' || c.tier === 'legend') && canonicalSpecial.size && !canonicalSpecial.has(c.id)) return;
+      (pools[c.tier] = pools[c.tier] || []).push(c.id);
+    });
+    let hash = 2166136261;
+    const mix = (v) => { const z = String(v); for (let i = 0; i < z.length; i++) { hash ^= z.charCodeAt(i); hash = Math.imul(hash, 16777619); } };
+    mix(d.round); mix(d.turn);
+    for (const t in d.field) { mix(t); for (const id of (d.field[t] || [])) mix(id || '-'); }
     for (const t in d.decks) {
-      const pool = pools[t] || []; let k = 0;
-      d.decks[t] = (d.decks[t] || []).map(() => pool.length ? pool[k++ % pool.length] : null).filter(x => x != null);
+      const pool = (pools[t] || []).slice().sort();
+      let tierHash = 2166136261;
+      for (let i = 0; i < t.length; i++) tierHash = Math.imul(tierHash ^ t.charCodeAt(i), 16777619);
+      E.shuffle(pool, E.makeRng((hash ^ tierHash) >>> 0));
+      for (const slot of (hidden[t] || [])) d.players[slot[0]].reserve[slot[1]] = pool.pop();
+      const n = (d.decks[t] || []).length;
+      d.decks[t] = pool.slice(Math.max(0, pool.length - n));
     }
     return d;
   }
@@ -822,6 +842,8 @@
     if (!dec) return src;
     if (dec.type === 'take') {
       for (const c of (dec.colors || [])) { const el = $(`.supply-row[data-color="${c}"] .ball`); src.push({ color: c, rect: el ? el.getBoundingClientRect() : null }); }
+    } else if (dec.type === 'takeMega') {
+      const el = $('[data-take-mega] .ball'); src.push({ color: 'mega-token', rect: el ? el.getBoundingClientRect() : null });
     } else if (dec.cardId) {
       let el = $(`.card[data-card="${dec.cardId}"]`) || $(`[data-reserve-capture="${dec.cardId}"]`);
       const card = G.byId[dec.cardId];
@@ -837,7 +859,7 @@
     if (!panel) return;
     panel.classList.add('receiving'); setTimeout(() => panel.classList.remove('receiving'), 520);
     const dc = centerOf(panel);
-    if (dec.type === 'take') { for (const it of (src || [])) flyBall(it.color, it.rect, dc); }
+    if (dec.type === 'take' || dec.type === 'takeMega') { for (const it of (src || [])) flyBall(it.color, it.rect, dc); }
     else if (dec.type === 'capture' || dec.type === 'reserve') { const it = (src || [])[0]; if (it) flyCard(it.img, it.rect, dc, it.tier); }
   }
   // capture source rects, apply mutation, render, animate ghosts to the player, then continue
@@ -993,6 +1015,7 @@
     if (a.type === 'take') return { type: 'take', colors: a.colors };
     if (a.type === 'capture') return { type: 'capture', cardId: a.cardId };
     if (a.type === 'reserve') return { type: 'reserve', cardId: (a.target && a.target.fromField) || null, deck: (a.target && a.target.fromDeck) || null };
+    if (a.type === 'takeMega') return { type: 'takeMega' };
     return { type: 'pass' };
   }
 
@@ -1121,14 +1144,11 @@
         const plan = isUltra
           ? VSearch.chooseTurn(G, ULTRA_CFG)            // determinized MCTS, heuristic prior+leaf (2p only)
           : AI.chooseTurn(G, { difficulty: fallbackDiff });
-        const takeMega = G.megasEnabled && aiShouldTakeMega(G, pid);
-        dec = takeMega ? { type: 'pass' } : decodePlan(plan);
+        dec = decodePlan(plan);
         applyFn = () => {
-          if (takeMega) E.actionTakeMega(G);
-          else if (plan.action) E.applyAction(G, plan.action); else E.actionPass(G);
+          if (plan.action) E.applyAction(G, plan.action); else E.actionPass(G);
           for (const c of plan.discards) E.actionDiscard(G, c);
-          // Megas: a mega-evolution (if possible) takes priority over a normal one.
-          if (G.megasEnabled && !G.evolvedThisTurn) aiTryMegaEvolve(G, pid);
+          if (!G.evolvedThisTurn && plan.megaEvolution) E.actionMegaEvolve(G, plan.megaEvolution.megaId, plan.megaEvolution.fromId);
           if (!G.evolvedThisTurn && plan.evolution) E.actionEvolve(G, plan.evolution.fromId, plan.evolution.toId);
           E.endTurn(G);
         };
@@ -1140,29 +1160,6 @@
       if (G.phase === 'gameover') { setTimeout(showWin, ANIM_MS); return; }
       setTimeout(() => { if (epoch === gameEpoch) beginTurn(); }, ANIM_MS);
     }, think);
-  }
-
-  // ---- simple AI behaviour for the Megas expansion (heuristic seat) ----
-  function aiShouldTakeMega(G, pid) {
-    const p = G.players[pid];
-    if (p.megaToken >= 1 || G.supply.megaToken < 1) return false;
-    // pursue a mega if we own a base species whose available mega we can already afford
-    for (const id of G.megaOffer) {
-      const m = byId[id];
-      if (p.board.some(b => byId[b].name === m.megaFrom) && E.canAfford(G, p, m)) return true;
-    }
-    return false;
-  }
-  function aiTryMegaEvolve(G, pid) {
-    const p = G.players[pid];
-    const opts = E.megaEvolveOptions(G, p);
-    if (!opts.length) return;
-    let best = null, bestGain = -1e9;
-    for (const o of opts) {
-      const gain = (byId[o.megaId].vp - byId[o.fromId].vp) + (byId[o.megaId].bonusCount - 1); // VP + extra bonuses
-      if (gain > bestGain) { bestGain = gain; best = o; }
-    }
-    if (best) E.actionMegaEvolve(G, best.megaId, best.fromId);
   }
 
   // ---------------------------------------------------------------- win

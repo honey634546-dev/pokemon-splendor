@@ -196,14 +196,23 @@
         if (!acted) { try { E.actionPass(this.G); } catch (e) { } }
       }
       // discards (AI plan, then a forced fallback if still over the cap)
-      if (Array.isArray(plan.discards)) for (const col of plan.discards) { try { E.actionDiscard(this.G, col); } catch (e) { } }
+      if (Array.isArray(plan.discards)) for (const col of plan.discards) {
+        if (!E.needsDiscard(this.G, this.G.players[seat])) break;
+        if (E.ALL_TOKENS.indexOf(col) < 0) continue;
+        try { E.actionDiscard(this.G, col); } catch (e) { }
+      }
       let guard = 0;
       while (E.needsDiscard(this.G, this.G.players[seat]) && guard++ < 20) {
         const tok = E.ALL_TOKENS.find(c => this.G.players[seat].tokens[c] > 0);
         if (!tok) break;
         try { E.actionDiscard(this.G, tok); } catch (e) { break; }
       }
-      if (plan.evolution) { try { E.actionEvolve(this.G, plan.evolution.fromId, plan.evolution.toId); } catch (e) { } }
+      if (plan.megaEvolution) {
+        try { E.actionMegaEvolve(this.G, plan.megaEvolution.megaId, plan.megaEvolution.fromId); } catch (e) { }
+      }
+      if (!this.G.evolvedThisTurn && plan.evolution) {
+        try { E.actionEvolve(this.G, plan.evolution.fromId, plan.evolution.toId); } catch (e) { }
+      }
       try { E.endTurn(this.G); } catch (e) { }
       this.turnStartedAt = this.now;
       this.seq++;

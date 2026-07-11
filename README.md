@@ -52,8 +52,8 @@ npx serve .
 index.html          入口
 css/style.css       样式（含 CSS 绘制的精灵球 / 动画 / 联机大厅）
 js/engine.js        纯逻辑游戏引擎（规则 / 进化 / 计分 / 脱敏 / 合法动作），浏览器与 Node 通用
-js/ai.js            电脑对手（评估函数 + 进化感知的一层搜索；SPSA 自动调参权重）
-js/vsearch.js       「究极」难度：基于启发式先验的去随机化 MCTS（仅 2 人）
+js/ai.js            电脑对手（完整扩展行动规划 + 公共信息采样 + 路线/威胁/进化决策）
+js/vsearch.js       「究极」难度：可复现的信息集 MCTS（仅 2 人，极高分支时自适应回退）
 js/cards.js         卡牌数据库（自动生成，勿手改）
 js/megas.js         超级进化扩展 · js/pokemart.js  PokéMart 商店扩展
 js/net.js           联机客户端传输（window.Net：WebSocket + 心跳 + token 重连）
@@ -73,6 +73,7 @@ wrangler.jsonc      Cloudflare 部署配置（静态资源 + Durable Object + �
 ```bash
 node test/engine.test.js   # 引擎规则 + 100 局自走验证（含计分/进化/结束/筹码守恒/脱敏）
 node test/ai.test.js       # AI 强度（对贪心基线胜率）/ 终局 / 延迟
+node test/ai_expansions.test.js # PokéMart/Mega AI、暗牌公平性、搜索稳定性
 node test/room.test.js     # 联机房间权威（座位/脱敏/重连/持久化/超时代打）
 node test/megas.test.js    # 超级进化扩展
 node test/pokemart.test.js # PokéMart 商店扩展

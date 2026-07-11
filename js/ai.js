@@ -26,9 +26,9 @@
   const { COLORS, ALL_TOKENS, FIELD_TIERS } = E;
 
   const DIFF = {
-    easy:   { evoBias: 0.4, noise: 6,   proximity: 0.5, deny: 0 },
-    normal: { evoBias: 0.8, noise: 1.5, proximity: 1.0, deny: 0 },
-    hard:   { evoBias: 1.0, noise: 0,   proximity: 1.0, deny: 10 },
+    easy:   { evoBias: 0.4, noise: 6,   proximity: 0.5, deny: 0,  beliefs: 1 },
+    normal: { evoBias: 0.8, noise: 1.5, proximity: 1.0, deny: 0,  beliefs: 1 },
+    hard:   { evoBias: 1.0, noise: 0,   proximity: 1.0, deny: 10, beliefs: 4 },
   };
 
   // Eval weights — SPSA-tuned via self-play (test/tune.js). The tuned set beats the original hand-set
@@ -44,6 +44,12 @@
     evo: 6.211, denyMul: 1.023,
   };
   let W = Object.assign({}, DEFAULT_W);
+  const ROUTE_PAIRS = [
+    ['杰尼龟', '独角虫', 10], ['凯西', '喇叭芽', 7],
+    ['小火龙', '尼多兰', 7], ['走路草', '鬼斯', 4],
+    ['迷你龙', '绿毛虫', 6], ['绿毛虫', '小拳石', 7],
+    ['迷你龙', '隆隆石', 5],
+  ];
 
   // ---- static position evaluation from player `pid`'s perspective ----
   function evalState(s, pid, cfg) {
@@ -78,6 +84,17 @@
     score += Math.min(distinct, 2) * W.distinct;
     if (bvals[0] > 5) score -= (bvals[0] - 5) * W.overstack;   // mild anti-overstack
 
+    // Mega games have a conjunctive victory condition: raw VP alone is useless
+    // without all five bonus colours and a Mega in play.  Treat the required
+    // Mega as a strategic objective worth a little over two VP, and progressively
+    // value colour coverage once the engine is established.  Without this term a
+    // superficially sensible VP maximiser can reach 25+ points yet never finish.
+    if (s.megasEnabled) {
+      const hasMega = p.board.some(id => s.byId[id].tier === 'mega');
+      if (hasMega) score += 260;
+      score += Math.max(0, distinct - 2) * (vp >= 12 ? 30 : 12);
+    }
+
     // tokens: concave value with a real anti-hoard penalty past 8 so the AI
     // converts tokens into cards instead of sitting at the 10 limit.
     const toks = E.tokenTotal(p);
@@ -93,7 +110,7 @@
     // balls toward a high-VP target instead of grabbing 0-VP junk.
     const early = s.round <= 6;
     const targets = [];
-    for (const tier of FIELD_TIERS) for (const id of s.field[tier]) if (id) targets.push(id);
+    for (const tier of actionTiers(s)) for (const id of s.field[tier]) if (id) targets.push(id);
     for (const id of p.reserve) targets.push(id);
     let bestProx = 0, prox2 = 0;
     for (const id of targets) {
@@ -120,7 +137,7 @@
         if (q === pid) continue;
         const op = s.players[q], ob = E.bonuses(s, op);
         let oprox = 0;
-        for (const tier of FIELD_TIERS) for (const id of s.field[tier]) {
+        for (const tier of actionTiers(s)) for (const id of s.field[tier]) {
           if (!id) continue; const card = s.byId[id];
           const rl = card.tier === 'rare' || card.tier === 'legend';
           if ((card.vp || 0) < 2 && !rl) continue;
@@ -165,6 +182,121 @@
     return s._byName[name];
   }
 
+  // ---- complete action planner -------------------------------------------------
+  // Engine.legalActions intentionally stays compact for generic callers. The AI
+  // expands PokéMart choices here so search can compare association colours,
+  // POKÉDEX spending, discard payments and free-card chains instead of silently
+  // ignoring those cards. The same planner also exposes takeMega to headless play.
+  const actionTiers = (s) => E.fieldTiers ? E.fieldTiers(s) : FIELD_TIERS;
+  function copyTargets(s, p) {
+    const seen = {}, out = [];
+    for (const id of p.board) {
+      const color = E.effBonusColor(s, p, id);
+      if (color && !seen[color]) { seen[color] = true; out.push(id); }
+    }
+    return out;
+  }
+  function pokedexSpend(s, p, card) {
+    if (E.canAfford(s, p, card)) return [];
+    const dex = p.board.filter(id => E.isPokemart(s.byId[id]) && s.byId[id].effect === 'colorless_master');
+    for (let n = 1; n <= dex.length; n++) if (E.computePayment(s, p, card, n * 2).ok) return dex.slice(0, n);
+    return null;
+  }
+  function combinations(ids, count, limit) {
+    const out = [], cur = []; limit = limit || 24;
+    function walk(at) {
+      if (out.length >= limit) return;
+      if (cur.length === count) { out.push(cur.slice()); return; }
+      for (let i = at; i <= ids.length - (count - cur.length); i++) { cur.push(ids[i]); walk(i + 1); cur.pop(); }
+    }
+    walk(0); return out;
+  }
+  function sacrificeValue(s, id) {
+    const card = s.byId[id]; if (!card) return 1e9;
+    let value = (card.vp || 0) * 120 + (card.bonusCount || 1) * 22;
+    if (card.evolvesTo) value += 18;
+    if (card.tier === 'rare' || card.tier === 'legend') value += 45;
+    if (E.isPokemart(card)) {
+      if (card.effect === 'colorless_master') value += 24;
+      else if (card.effect === 'double') value += 30;
+      else value += 16;
+    }
+    return value;
+  }
+  function freeCardValue(s, card) {
+    let value = (card.vp || 0) * 100 + (card.bonusCount || 1) * 20;
+    if (card.evolvesTo) { const to = DBfind(s, card.evolvesTo); if (to) value += Math.max(0, to.vp - card.vp) * 22; }
+    if (E.isPokemart(card)) {
+      const effect = { free: 55, copy_free: 50, double: 36, copy: 24, colorless_master: 20, discard_buy: 18 }[card.effect] || 0;
+      value += effect;
+    }
+    return value;
+  }
+  function freePlans(s, p, parent, depth, seen) {
+    depth = depth || 0; seen = seen || {};
+    if (depth > 4) return [{}];
+    const out = [], candidates = [];
+    for (const tier of E.freeTiers(parent)) for (const id of (s.field[tier] || [])) {
+      if (!id || seen[id]) continue;
+      const card = s.byId[id];
+      if (!E.freeTakeable(s, p, card)) continue;
+      candidates.push(id);
+    }
+    candidates.sort((a, b) => freeCardValue(s, s.byId[b]) - freeCardValue(s, s.byId[a]) || String(a).localeCompare(String(b)));
+    for (const id of candidates) {
+      const card = s.byId[id];
+      const assoc = E.isPokemart(card) && (card.effect === 'copy' || card.effect === 'copy_free') ? copyTargets(s, p) : [null];
+      if (!assoc.length) continue;
+      const nested = E.isPokemart(card) && (card.effect === 'free' || card.effect === 'copy_free')
+        ? freePlans(s, p, card, depth + 1, Object.assign({}, seen, { [id]: true })) : [{}];
+      for (const target of assoc) for (const sub of nested) {
+        const freeOpts = Object.assign({}, sub);
+        if (target) freeOpts.copyTargetId = target;
+        out.push({ freeTakeId: id, freeOpts });
+        if (out.length >= 24) return out;
+      }
+    }
+    return out.length ? out : [{}];
+  }
+  function captureActions(s, p, id) {
+    const card = s.byId[id]; if (!card) return [];
+    if (E.isPokemart(card) && card.effect === 'discard_buy') {
+      const ep = card.effectParam, owned = p.board.filter(bid => E.effBonusColor(s, p, bid) === ep.discardColor);
+      owned.sort((a, b) => sacrificeValue(s, a) - sacrificeValue(s, b) || String(a).localeCompare(String(b)));
+      return combinations(owned, ep.discardCount, 96)
+        .sort((a, b) => a.reduce((v, x) => v + sacrificeValue(s, x), 0) - b.reduce((v, x) => v + sacrificeValue(s, x), 0))
+        .slice(0, 24)
+        .map(discardCards => ({ type: 'capture', cardId: id, opts: { discardCards } }));
+    }
+    const spend = pokedexSpend(s, p, card); if (spend === null) return [];
+    const base = spend.length ? { spendPokedex: spend } : {};
+    if (!E.isPokemart(card) || !card.effect || card.effect === 'double' || card.effect === 'colorless_master')
+      return [{ type: 'capture', cardId: id, opts: base }];
+    const assoc = (card.effect === 'copy' || card.effect === 'copy_free') ? copyTargets(s, p) : [null];
+    if (!assoc.length) return [];
+    const free = (card.effect === 'free' || card.effect === 'copy_free') ? freePlans(s, p, card) : [{}];
+    const out = [];
+    for (const target of assoc) for (const fp of free) {
+      const opts = Object.assign({}, base, fp);
+      if (target) opts.copyTargetId = target;
+      out.push({ type: 'capture', cardId: id, opts });
+      if (out.length >= 32) return out;
+    }
+    return out;
+  }
+  function legalActions(s) {
+    if (!s || s.phase !== 'play' || s.acted) return [];
+    const p = s.players[s.turn];
+    const acts = E.legalActions(s).filter(a => a.type !== 'capture');
+    if (s.megasEnabled && p.megaToken < 1 && s.supply.megaToken > 0 && !acts.some(a => a.type === 'takeMega'))
+      acts.push({ type: 'takeMega' });
+    const ids = [];
+    for (const tier of actionTiers(s)) for (const id of (s.field[tier] || [])) if (id) ids.push(id);
+    for (const id of p.reserve) ids.push(id);
+    for (const id of ids) acts.push(...captureActions(s, p, id));
+    return acts;
+  }
+
   // ---- best end-of-turn evolution (by static eval) on a clone ----
   function bestEvolution(s, pid, cfg) {
     const opts = E.evolutionOptions(s, s.players[pid]);
@@ -175,7 +307,22 @@
       const c = E.clone(s);
       const r = E.actionEvolve(c, o.fromId, o.toId);
       if (!r.ok) continue;
-      const sc = evalState(c, pid, null) + (cfg ? cfg.evoBias : 1) * 8; // small intrinsic bonus: free VP/action
+      const route = megaEvolutionRouteBonus(s, pid, o.toId);
+      const sc = evalState(c, pid, null) + (cfg ? cfg.evoBias : 1) * 8 + route; // small intrinsic bonus: free VP/action
+      if (sc > bestScore) { bestScore = sc; best = o; }
+    }
+    return best;
+  }
+  function bestMegaEvolution(s, pid, cfg) {
+    if (!s.megasEnabled) return null;
+    const opts = E.megaEvolveOptions(s, s.players[pid]);
+    if (!opts.length) return null;
+    const base = evalState(s, pid, null);
+    let best = null, bestScore = base;
+    for (const o of opts) {
+      const c = E.clone(s), r = E.actionMegaEvolve(c, o.megaId, o.fromId);
+      if (!r.ok) continue;
+      const sc = evalState(c, pid, null) + (cfg ? cfg.evoBias : 1) * 12;
       if (sc > bestScore) { bestScore = sc; best = o; }
     }
     return best;
@@ -186,15 +333,24 @@
   function scoreLine(s, pid, cfg) {
     const c = E.clone(s);
     manage(c, cfg);
-    return evalState(c, pid, cfg);
+    const triggered = winningPosition(c, c.players[pid]);
+    const r = E.endTurn(c);
+    let score = evalState(c, pid, cfg);
+    // An action that satisfies the full victory condition is qualitatively
+    // different from merely gaining more VP.  This is especially important in
+    // Mega mode, where 30 points without a Mega still cannot end the game.
+    if (triggered) score += 100000;
+    if (r && r.gameover) score += c.winner === pid ? 1000000 : -1000000;
+    else if (!c.megasEnabled) score -= immediateWinThreats(c, pid) * 260;
+    return score;
   }
 
   // perform end-of-turn management (discard to 10, then best evolution) on `s`.
-  // returns { discards:[color], evolution:{fromId,toId}|null }
+  // returns { discards, evolution, megaEvolution }
   function manage(s, cfg) {
     const pid = s.turn;
     const p = s.players[pid];
-    const plan = { discards: [], evolution: null };
+    const plan = { discards: [], evolution: null, megaEvolution: null };
     // discard greedily, choosing the color whose removal best preserves value
     while (E.needsDiscard(s, p)) {
       let bestColor = null, bestScore = -Infinity;
@@ -209,16 +365,149 @@
       if (bestColor == null) break;
       E.actionDiscard(s, bestColor); plan.discards.push(bestColor);
     }
-    const evo = bestEvolution(s, pid, cfg);
-    if (evo) { E.actionEvolve(s, evo.fromId, evo.toId); plan.evolution = { fromId: evo.fromId, toId: evo.toId }; }
+    const evo = bestEvolution(s, pid, cfg), mega = bestMegaEvolution(s, pid, cfg);
+    let normalScore = -Infinity, megaScore = -Infinity;
+    if (evo) { const c = E.clone(s); E.actionEvolve(c, evo.fromId, evo.toId); normalScore = evalState(c, pid, cfg); }
+    let megaWins = false;
+    if (mega) {
+      const c = E.clone(s); E.actionMegaEvolve(c, mega.megaId, mega.fromId);
+      megaWins = winningPosition(c, c.players[pid]);
+      megaScore = evalState(c, pid, cfg) + 8 + (megaWins ? 100000 : 0);
+    }
+    if (mega && megaScore >= normalScore) {
+      E.actionMegaEvolve(s, mega.megaId, mega.fromId);
+      plan.megaEvolution = { megaId: mega.megaId, fromId: mega.fromId };
+    } else if (evo) {
+      E.actionEvolve(s, evo.fromId, evo.toId);
+      plan.evolution = { fromId: evo.fromId, toId: evo.toId };
+    }
     return plan;
   }
 
   function evalWithEvo(s, pid, cfg) {
+    let best = evalState(s, pid, cfg);
     const evo = bestEvolution(s, pid, cfg);
-    if (!evo) return evalState(s, pid, cfg);
-    const c = E.clone(s); E.actionEvolve(c, evo.fromId, evo.toId);
-    return evalState(c, pid, cfg);
+    if (evo) {
+      const c = E.clone(s); E.actionEvolve(c, evo.fromId, evo.toId);
+      best = Math.max(best, evalState(c, pid, cfg) + (winningPosition(c, c.players[pid]) ? 100000 : 0));
+    }
+    const mega = bestMegaEvolution(s, pid, cfg);
+    if (mega) {
+      const c = E.clone(s); E.actionMegaEvolve(c, mega.megaId, mega.fromId);
+      best = Math.max(best, evalState(c, pid, cfg) + (winningPosition(c, c.players[pid]) ? 100000 : 0));
+    }
+    return best;
+  }
+
+  function megaEvolutionRouteBonus(s, pid, toId) {
+    if (!s.megasEnabled) return 0;
+    const p = s.players[pid];
+    if (p.board.some(id => s.byId[id].tier === 'mega')) return 0;
+    const target = s.byId[toId];
+    if (!s.megaOffer.some(id => s.byId[id].megaFrom === target.name)) return 0;
+    const vp = E.scoreOf(s, p), b = E.bonuses(s, p);
+    const readyToFinishRoute = vp >= 16 || COLORS.every(c => b[c] > 0);
+    return readyToFinishRoute ? 25 : 10;
+  }
+
+  function winningPosition(s, p) {
+    if (!s.megasEnabled) return E.scoreOf(s, p) >= (s.winScore || E.WIN_SCORE);
+    if (E.scoreOf(s, p) < E.MEGA_WIN_SCORE) return false;
+    const b = E.bonuses(s, p);
+    return COLORS.every(c => b[c] > 0) && p.board.some(id => s.byId[id].tier === 'mega');
+  }
+
+  // Public, one-turn threat model used after each candidate line.  It checks the
+  // guide's two common finishes together: buy a scoring card, and use the free
+  // end-of-turn evolution window.  Opponents' hidden reserves are intentionally
+  // excluded; only visible information may influence the decision.
+  function immediateWinThreats(s, pid) {
+    const target = s.winScore || E.WIN_SCORE;
+    let threats = 0;
+    for (let q = 0; q < s.numPlayers; q++) {
+      if (q === pid) continue;
+      const op = s.players[q], vp = E.scoreOf(s, op), b = E.bonuses(s, op);
+      let captureGain = 0, evolutionGain = 0;
+      for (const tier of FIELD_TIERS) for (const id of (s.field[tier] || [])) {
+        if (!id) continue;
+        const card = s.byId[id];
+        if (E.canAfford(s, op, card)) captureGain = Math.max(captureGain, card.vp || 0);
+        for (const fromId of op.board) {
+          const from = s.byId[fromId];
+          if (!from.evolvesTo || !from.evoCost || from.evolvesTo !== card.name) continue;
+          if (b[from.evoCost.color] >= from.evoCost.count)
+            evolutionGain = Math.max(evolutionGain, Math.max(0, (card.vp || 0) - (from.vp || 0)));
+        }
+      }
+      if (vp + captureGain + evolutionGain >= target) threats++;
+    }
+    return threats;
+  }
+
+  function strategyActionBonus(s, a, pid) {
+    if (!a || a.type !== 'capture') return 0;
+    const p = s.players[pid], card = s.byId[a.cardId];
+    if (!card || E.isPokemart(card)) return 0;
+    let value = 0;
+    const owned = new Set(p.board.map(id => s.byId[id].name));
+    const visible = new Set();
+    for (const tier of FIELD_TIERS) for (const id of (s.field[tier] || [])) if (id) visible.add(s.byId[id].name);
+    for (const pair of ROUTE_PAIRS) {
+      if (card.name === pair[0] && owned.has(pair[1])) value += pair[2];
+      else if (card.name === pair[1] && owned.has(pair[0])) value += pair[2];
+      else if (card.name === pair[0] && visible.has(pair[1])) value += pair[2] * 0.25;
+      else if (card.name === pair[1] && visible.has(pair[0])) value += pair[2] * 0.25;
+    }
+    return value;
+  }
+
+  function publicHash(s, pid, salt) {
+    let h = (2166136261 ^ (salt || 0)) >>> 0;
+    function add(v) {
+      const str = String(v == null ? '' : v);
+      for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    }
+    add(s.round); add(s.turn); add(pid); add(s.phase); add(s.lastRound);
+    for (const c of ALL_TOKENS) add(s.supply[c]);
+    for (const tier of actionTiers(s)) {
+      add(tier); for (const id of (s.field[tier] || [])) add(id || '-');
+    }
+    for (let q = 0; q < s.numPlayers; q++) {
+      const p = s.players[q]; add(q);
+      for (const c of ALL_TOKENS) add(p.tokens[c]);
+      for (const id of p.board) add(id);
+      for (const id of p.buried) add(id);
+      if (q === pid) for (const id of p.reserve) add(id);
+      else for (const id of p.reserve) add((s.byId[id] || {}).tier || 'hidden');
+    }
+    for (const id of (s.megaOffer || [])) add(id);
+    return h >>> 0;
+  }
+
+  // Build a reproducible information-set sample.  Visible cards and the acting
+  // player's own reserve stay fixed; ordered decks and opponents' hidden reserve
+  // identities are pooled by tier, sorted, then re-dealt.  Sorting before the
+  // shuffle makes the result invariant to the engine's real hidden order.
+  function beliefState(s, pid, salt) {
+    const d = E.clone(s), base = publicHash(s, pid, salt);
+    for (const tier of actionTiers(d)) {
+      const pool = (d.decks[tier] || []).filter(id => typeof id === 'string');
+      const slots = [];
+      for (let q = 0; q < d.numPlayers; q++) {
+        if (q === pid) continue;
+        for (let i = 0; i < d.players[q].reserve.length; i++) {
+          const id = d.players[q].reserve[i], card = d.byId[id];
+          if (card && card.tier === tier) { pool.push(id); slots.push([q, i]); }
+        }
+      }
+      pool.sort();
+      let th = 2166136261;
+      for (let i = 0; i < tier.length; i++) { th ^= tier.charCodeAt(i); th = Math.imul(th, 16777619); }
+      E.shuffle(pool, E.makeRng((base ^ th) >>> 0));
+      for (const slot of slots) d.players[slot[0]].reserve[slot[1]] = pool.pop();
+      d.decks[tier] = pool;
+    }
+    return d;
   }
 
   // ---- choose the whole turn (1-ply eval search) ----
@@ -226,19 +515,26 @@
     opts = opts || {};
     const cfg = DIFF[opts.difficulty || 'hard'];
     const pid = s.turn;
-    const acts = E.legalActions(s);
+    const acts = legalActions(s);
     if (!acts.length) return { action: null, discards: [], evolution: null };
 
     // deterministic-ish noise per call (so 'easy' varies without Math.random in engine)
     let seed = (s.round * 131 + s.turn * 17 + acts.length * 7) >>> 0;
     E._noise = () => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed / 4294967296) - 0.5; };
 
+    const views = [], beliefCount = opts.beliefs != null ? opts.beliefs : cfg.beliefs;
+    for (let i = 0; i < Math.max(1, beliefCount || 1); i++) views.push(beliefState(s, pid, i + 1));
     let best = null, bestScore = -Infinity;
     for (const a of acts) {
-      const c = E.clone(s);
-      const r = E.applyAction(c, a);
-      if (!r.ok) continue;
-      const sc = scoreLine(c, pid, cfg);
+      let total = 0, valid = true;
+      for (const view of views) {
+        const c = E.clone(view);
+        const r = E.applyAction(c, a);
+        if (!r.ok) { valid = false; break; }
+        total += scoreLine(c, pid, cfg);
+      }
+      if (!valid) continue;
+      const sc = total / views.length + strategyActionBonus(s, a, pid);
       if (sc > bestScore) { bestScore = sc; best = a; }
     }
     E._noise = null;
@@ -248,7 +544,7 @@
     const c = E.clone(s);
     E.applyAction(c, best);
     const mp = manage(c, cfg);
-    return { action: best, discards: mp.discards, evolution: mp.evolution };
+    return { action: best, discards: mp.discards, evolution: mp.evolution, megaEvolution: mp.megaEvolution };
   }
 
   // ---- apply a chosen plan to the live state (used headless; UI animates) ----
@@ -257,12 +553,13 @@
     if (plan.action) E.applyAction(s, plan.action);
     else E.actionPass(s); // no legal main action available
     for (const col of plan.discards) E.actionDiscard(s, col);
-    if (plan.evolution) E.actionEvolve(s, plan.evolution.fromId, plan.evolution.toId);
+    if (plan.megaEvolution) E.actionMegaEvolve(s, plan.megaEvolution.megaId, plan.megaEvolution.fromId);
+    else if (plan.evolution) E.actionEvolve(s, plan.evolution.fromId, plan.evolution.toId);
     const r = E.endTurn(s);
     return { plan, endTurn: r };
   }
 
-  return { chooseTurn, playTurn, evalState, bestEvolution, manage, DIFF,
+  return { chooseTurn, playTurn, evalState, bestEvolution, bestMegaEvolution, manage, legalActions, beliefState, publicHash, DIFF,
            DEFAULT_W, getWeights: () => Object.assign({}, W),
            setWeights: (w) => { W = Object.assign({}, DEFAULT_W, w); } };
 });
