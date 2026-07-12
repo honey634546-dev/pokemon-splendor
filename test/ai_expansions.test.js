@@ -76,6 +76,53 @@ test('AI spends a POKÉDEX when it unlocks an otherwise unaffordable capture', (
   assert.ok(fallback && fallback.opts.spendPokedex.length === 1, 'engine fallback is fully parameterised too');
 });
 
+test('hard AI can spend an affordable POKÉDEX to preserve Master Ball for an immediate Mega', () => {
+  const g = game({ pokemart: true, pokemartDB: PM, megas: true, megaDB: MEGA }), p = g.players[0];
+  const dex = PM.find(c => c.effect === 'colorless_master');
+  const mega = MEGA.find(c => c.id === 'mg_08');
+  const base = DB.find(c => c.name === mega.megaFrom);
+  const target = DB.find(c => c.id === 's1_08'); // yellow bonus; costs 2 red + 1 pink
+  giveCard(g, p, dex); giveCard(g, p, base); place(g, target);
+  p.megaToken = 1; g.supply.megaToken--;
+  for (const c of E.ALL_TOKENS) p.tokens[c] = 0;
+  for (const [color, count] of [['red', 2], ['yellow', 3], ['purple', 1]]) {
+    p.tokens[color] = count; g.supply[color] -= count;
+  }
+
+  assert.ok(E.canAfford(g, p, target), 'target is already affordable without the Pokedex');
+  assert.ok(!E.megaEvolveOptions(g, p).some(o => o.megaId === mega.id), 'Mega is not affordable before capture');
+  const actions = AI.legalActions(g).filter(a => a.type === 'capture' && a.cardId === target.id);
+  const normal = actions.find(a => !(a.opts.spendPokedex || []).length);
+  const proactive = actions.find(a => (a.opts.spendPokedex || []).includes(dex.id));
+  assert.ok(normal && proactive, 'AI compares normal payment with proactive Pokedex spending');
+  assert.ok(!AI.legalActions(g, AI.DIFF.normal).some(a => a.type === 'capture' && a.cardId === target.id &&
+    (a.opts.spendPokedex || []).length), 'normal AI keeps the simpler minimum-payment action space');
+
+  const withoutDex = E.clone(g);
+  assert.ok(E.applyAction(withoutDex, normal).ok);
+  assert.strictEqual(withoutDex.players[0].tokens.purple, 0, 'normal payment consumes the only Master Ball');
+  assert.ok(!E.megaEvolveOptions(withoutDex, withoutDex.players[0]).some(o => o.megaId === mega.id));
+
+  const withDex = E.clone(g);
+  assert.ok(E.applyAction(withDex, proactive).ok);
+  assert.strictEqual(withDex.players[0].tokens.purple, 1, 'Pokedex payment preserves the Master Ball');
+  assert.ok(!withDex.players[0].board.includes(dex.id), 'spent Pokedex is discarded');
+  const option = E.megaEvolveOptions(withDex, withDex.players[0]).find(o => o.megaId === mega.id);
+  assert.ok(option, 'new yellow bonus plus the preserved Master Ball unlocks Mega evolution');
+  assert.ok(E.actionMegaEvolve(withDex, option.megaId, option.fromId).ok, 'the full capture-to-Mega line is legal');
+
+  // Isolate the two payment variants and verify the planner selects the whole
+  // capture -> Mega line, not merely that the low-level action exists.
+  for (const tier in g.field) for (let i = 0; i < g.field[tier].length; i++)
+    if (g.field[tier][i] !== target.id) g.field[tier][i] = null;
+  for (const tier in g.decks) g.decks[tier] = [];
+  for (const color of E.ALL_TOKENS) g.supply[color] = 0;
+  const plan = AI.chooseTurn(g, { difficulty: 'hard' });
+  assert.strictEqual(plan.action.cardId, target.id);
+  assert.ok(plan.action.opts.spendPokedex.includes(dex.id), 'hard AI proactively spends the Pokedex');
+  assert.ok(plan.megaEvolution && plan.megaEvolution.megaId === mega.id, 'hard AI completes the unlocked Mega');
+});
+
 test('AI compares every distinct TM association colour', () => {
   const g = game({ pokemart: true, pokemartDB: PM }), p = g.players[0];
   giveCard(g, p, DB.find(c => c.bonus === 'red'));

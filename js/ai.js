@@ -26,9 +26,9 @@
   const { COLORS, ALL_TOKENS, FIELD_TIERS } = E;
 
   const DIFF = {
-    easy:   { evoBias: 0.4, noise: 6,   proximity: 0.5, deny: 0,  beliefs: 1 },
-    normal: { evoBias: 0.8, noise: 1.5, proximity: 1.0, deny: 0,  beliefs: 1 },
-    hard:   { evoBias: 1.0, noise: 0,   proximity: 1.0, deny: 10, beliefs: 4 },
+    easy:   { evoBias: 0.4, noise: 6,   proximity: 0.5, deny: 0,  beliefs: 1, proactivePokedex: false, queueAware: false },
+    normal: { evoBias: 0.8, noise: 1.5, proximity: 1.0, deny: 0,  beliefs: 1, proactivePokedex: false, queueAware: false },
+    hard:   { evoBias: 1.0, noise: 0,   proximity: 1.0, deny: 10, beliefs: 4, proactivePokedex: true, queueAware: true },
   };
 
   // Eval weights — SPSA-tuned via self-play (test/tune.js). The tuned set beats the original hand-set
@@ -151,8 +151,11 @@
       score -= oppMax * cfg.deny * W.denyMul;
     }
 
-    // evolution potential: a caught Pokémon whose next form is available and
-    // roughly affordable is nearly-free VP next turn — reward keeping such chains.
+    // Evolution potential: a caught Pokémon whose next form is available and
+    // roughly affordable is nearly-free VP next turn.  Only one evolution is
+    // allowed per turn, so hard AI discounts the second and later queued line
+    // instead of pretending every ready evolution can resolve at once.
+    const evoQueue = [];
     for (const id of p.board) {
       const card = s.byId[id];
       if (!card.evolvesTo || !card.evoCost) continue;
@@ -165,7 +168,12 @@
       const need = Math.max(0, card.evoCost.count - b[card.evoCost.color]);
       const tgt = DBfind(s, card.evolvesTo);
       const gain = tgt ? Math.max(0, tgt.vp - card.vp) : 1;
-      score += (gain * W.evo) / (1 + need);
+      evoQueue.push((gain * W.evo) / (1 + need));
+    }
+    evoQueue.sort((a, b) => b - a);
+    for (let i = 0; i < evoQueue.length; i++) {
+      const queueWeight = cfg && cfg.queueAware && !s.megasEnabled ? Math.pow(0.55, i) : 1;
+      score += evoQueue[i] * queueWeight;
     }
 
     if (cfg && cfg.noise) score += (E._noise ? E._noise() : 0) * cfg.noise;
@@ -196,11 +204,21 @@
     }
     return out;
   }
-  function pokedexSpend(s, p, card) {
-    if (E.canAfford(s, p, card)) return [];
+  function pokedexSpends(s, p, card, cfg) {
     const dex = p.board.filter(id => E.isPokemart(s.byId[id]) && s.byId[id].effect === 'colorless_master');
-    for (let n = 1; n <= dex.length; n++) if (E.computePayment(s, p, card, n * 2).ok) return dex.slice(0, n);
-    return null;
+    let min = -1, bestPurple = Infinity; const plans = [];
+    const canPreserveForMega = cfg && cfg.proactivePokedex && s.megasEnabled && p.megaToken > 0;
+    for (let n = 0; n <= dex.length; n++) {
+      const payment = E.computePayment(s, p, card, n * 2);
+      if (!payment.ok) continue;
+      if (min < 0) { min = n; bestPurple = payment.pay.purple; plans.push(dex.slice(0, n)); continue; }
+      // Do not guess the Mega route here: a free PokéMart chain may capture
+      // the required base. captureActions verifies the complete simulated line.
+      if (canPreserveForMega && payment.pay.purple < bestPurple) {
+        plans.push(dex.slice(0, n)); bestPurple = payment.pay.purple;
+      }
+    }
+    return min < 0 ? null : { plans, required: min };
   }
   function combinations(ids, count, limit) {
     const out = [], cur = []; limit = limit || 24;
@@ -258,7 +276,11 @@
     }
     return out.length ? out : [{}];
   }
-  function captureActions(s, p, id) {
+  function immediateMegaAfter(s, action) {
+    const c = E.clone(s), r = E.applyAction(c, action);
+    return !!(r.ok && E.megaEvolveOptions(c, c.players[c.turn]).length);
+  }
+  function captureActions(s, p, id, cfg) {
     const card = s.byId[id]; if (!card) return [];
     if (E.isPokemart(card) && card.effect === 'discard_buy') {
       const ep = card.effectParam, owned = p.board.filter(bid => E.effBonusColor(s, p, bid) === ep.discardColor);
@@ -268,24 +290,29 @@
         .slice(0, 24)
         .map(discardCards => ({ type: 'capture', cardId: id, opts: { discardCards } }));
     }
-    const spend = pokedexSpend(s, p, card); if (spend === null) return [];
-    const base = spend.length ? { spendPokedex: spend } : {};
-    if (!E.isPokemart(card) || !card.effect || card.effect === 'double' || card.effect === 'colorless_master')
-      return [{ type: 'capture', cardId: id, opts: base }];
+    const spendInfo = pokedexSpends(s, p, card, cfg); if (spendInfo === null) return [];
     const assoc = (card.effect === 'copy' || card.effect === 'copy_free') ? copyTargets(s, p) : [null];
     if (!assoc.length) return [];
     const free = (card.effect === 'free' || card.effect === 'copy_free') ? freePlans(s, p, card) : [{}];
-    const out = [];
-    for (const target of assoc) for (const fp of free) {
-      const opts = Object.assign({}, base, fp);
-      if (target) opts.copyTargetId = target;
-      out.push({ type: 'capture', cardId: id, opts });
-      if (out.length >= 32) return out;
+    const required = [], proactive = [];
+    for (let si = 0; si < spendInfo.plans.length; si++) {
+      const spend = spendInfo.plans[si], isProactive = spend.length > spendInfo.required;
+      for (const target of assoc) for (const fp of free) {
+        const opts = Object.assign({}, spend.length ? { spendPokedex: spend } : {}, fp);
+        if (target) opts.copyTargetId = target;
+        const action = { type: 'capture', cardId: id, opts };
+        if (isProactive) {
+          if (proactive.length < 8 && immediateMegaAfter(s, action)) proactive.push(action);
+        } else if (required.length < 32) required.push(action);
+      }
     }
-    return out;
+    // Keep the normal action space intact while reserving a small explicit beam
+    // for purple-preserving lines; otherwise a 24-way free chain can crowd them out.
+    return required.concat(proactive);
   }
-  function legalActions(s) {
+  function legalActions(s, cfg) {
     if (!s || s.phase !== 'play' || s.acted) return [];
+    cfg = cfg || DIFF.hard;
     const p = s.players[s.turn];
     const acts = E.legalActions(s).filter(a => a.type !== 'capture');
     if (s.megasEnabled && p.megaToken < 1 && s.supply.megaToken > 0 && !acts.some(a => a.type === 'takeMega'))
@@ -293,7 +320,7 @@
     const ids = [];
     for (const tier of actionTiers(s)) for (const id of (s.field[tier] || [])) if (id) ids.push(id);
     for (const id of p.reserve) ids.push(id);
-    for (const id of ids) acts.push(...captureActions(s, p, id));
+    for (const id of ids) acts.push(...captureActions(s, p, id, cfg));
     return acts;
   }
 
@@ -341,7 +368,11 @@
     // Mega mode, where 30 points without a Mega still cannot end the game.
     if (triggered) score += 100000;
     if (r && r.gameover) score += c.winner === pid ? 1000000 : -1000000;
-    else if (!c.megasEnabled) score -= immediateWinThreats(c, pid) * 260;
+    // Once the final round has begun, merely crossing the trigger no longer
+    // ends the game early.  Avoid paying a large tactical penalty for a threat
+    // that the normal score/denial evaluation already represents correctly.
+    else if ((!c.lastRound || cfg.blockFinalThreats) && !c.megasEnabled)
+      score -= immediateWinThreats(c, pid) * 260;
     return score;
   }
 
@@ -513,9 +544,9 @@
   // ---- choose the whole turn (1-ply eval search) ----
   function chooseTurn(s, opts) {
     opts = opts || {};
-    const cfg = DIFF[opts.difficulty || 'hard'];
+    const cfg = Object.assign({}, DIFF[opts.difficulty || 'hard'], opts.config || {});
     const pid = s.turn;
-    const acts = legalActions(s);
+    const acts = legalActions(s, cfg);
     if (!acts.length) return { action: null, discards: [], evolution: null };
 
     // deterministic-ish noise per call (so 'easy' varies without Math.random in engine)
