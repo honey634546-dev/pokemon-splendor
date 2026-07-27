@@ -207,12 +207,8 @@
         if (!tok) break;
         try { E.actionDiscard(this.G, tok); } catch (e) { break; }
       }
-      if (plan.megaEvolution) {
-        try { E.actionMegaEvolve(this.G, plan.megaEvolution.megaId, plan.megaEvolution.fromId); } catch (e) { }
-      }
-      if (!this.G.evolvedThisTurn && plan.evolution) {
-        try { E.actionEvolve(this.G, plan.evolution.fromId, plan.evolution.toId); } catch (e) { }
-      }
+      if (plan.megaEvolution) { try { E.actionMegaEvolve(this.G, plan.megaEvolution.megaId, plan.megaEvolution.fromId); } catch (e) { } }
+      else if (plan.evolution) { try { E.actionEvolve(this.G, plan.evolution.fromId, plan.evolution.toId); } catch (e) { } }
       try { E.endTurn(this.G); } catch (e) { }
       this.turnStartedAt = this.now;
       this.seq++;

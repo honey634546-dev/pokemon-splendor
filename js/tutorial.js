@@ -84,7 +84,7 @@
       html: '<b>捕捉</b> = 花精灵球把宝可梦收入囊中，<b>立刻得分</b>。<br>看 <b>喇叭芽</b>：它要 2红+2粉，但你的 <b>2 个粉色折扣</b>把粉色全抵掉了，所以只要 <b>2 红</b>就能捕捉——你手上正好有 2 红！<br>👇 点高亮的 <b>喇叭芽</b>，再点「捕捉」。',
       arrange: (g) => { setTokens(g, { red: 2 }); placeField(g, 'stage1', 1, 's1_04'); E.refill(g, 'stage1'); },
       target: () => document.querySelector('.card[data-card="s1_04"]'),
-      detect: (g, c) => P(g).board.length > c.board,
+      detect: (g) => P(g).board.includes('s1_04'),
     },
     {
       title: '④ 进化',
@@ -207,15 +207,32 @@
   function positionSpot() {
     const s = steps[idx], mask = document.getElementById('tut-mask'); if (!mask) return;
     const t = s ? resolve(s.target) : null;
-    if (!t) { mask.classList.add('hidden'); return; }
+    if (!t) { mask.classList.add('hidden'); positionBubble(null); return; }
     const r = t.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) { mask.classList.add('hidden'); return; }
+    if (r.width === 0 && r.height === 0) { mask.classList.add('hidden'); positionBubble(null); return; }
     const pad = 8;
     mask.style.left = (r.left - pad) + 'px';
     mask.style.top = (r.top - pad) + 'px';
     mask.style.width = (r.width + pad * 2) + 'px';
     mask.style.height = (r.height + pad * 2) + 'px';
     mask.classList.remove('hidden');
+    positionBubble(r);
+  }
+
+  function positionBubble(targetRect) {
+    const bubble = document.getElementById('tut-bubble');
+    if (!bubble || bubble.classList.contains('hidden')) return;
+    const vv = window.visualViewport;
+    const viewTop = vv ? vv.offsetTop : 0, viewH = vv ? vv.height : window.innerHeight;
+    const safe = 10, bh = Math.min(bubble.offsetHeight, viewH - safe * 2);
+    let top = viewTop + 58;
+    if (targetRect) {
+      const below = viewTop + viewH - targetRect.bottom;
+      if (below >= bh + 18) top = targetRect.bottom + 14;
+      else if (targetRect.top - viewTop >= bh + 18) top = targetRect.top - bh - 14;
+    }
+    top = Math.max(viewTop + safe, Math.min(top, viewTop + viewH - bh - safe));
+    bubble.style.top = Math.round(top) + 'px';
   }
 
   function snapshot(g) {
@@ -240,7 +257,7 @@
       setTimeout(() => nx.focus(), 0);
     } else {
       const hint = document.createElement('span'); hint.className = 'tut-hint'; hint.textContent = '按上面的提示操作…'; acts.appendChild(hint);
-      const retry = document.createElement('button'); retry.className = 'ghost small'; retry.textContent = '重来本步'; retry.onclick = showStep; acts.appendChild(retry);
+      const retry = document.createElement('button'); retry.className = 'ghost small'; retry.textContent = '重来本步'; retry.onclick = retryStep; acts.appendChild(retry);
     }
     const ex = document.createElement('button'); ex.className = 'ghost small'; ex.textContent = '退出教程'; ex.onclick = exit; acts.appendChild(ex);
     document.getElementById('tut-bubble').classList.remove('hidden');
@@ -254,6 +271,11 @@
   }
 
   function next() { idx++; if (idx >= steps.length) finish(); else showStep(); }
+  function retryStep() {
+    const u = PS.UI;
+    if (u) { u.pick = []; u.selCard = null; u.selDeck = null; u.busy = false; }
+    showStep();
+  }
 
   function finish() {
     active = false; removeListeners();
@@ -261,6 +283,7 @@
     const m = document.getElementById('tut-mask'); if (m) m.classList.add('hidden');
     const wm = document.getElementById('win-modal'); if (wm) wm.classList.add('hidden');
     const b = document.getElementById('tut-bubble'); if (!b) return;
+    try { localStorage.setItem('ps-tutorial-complete-' + curMode, '1'); } catch (e) { }
     document.getElementById('tut-step').textContent = '教程完成';
     document.getElementById('tut-title').innerHTML = curMode === 'megas' ? '⚡ 学会超级进化！' : curMode === 'pokemart' ? '🛒 PokéMart 毕业！' : '🏆 恭喜通关！';
     document.getElementById('tut-text').innerHTML = curMode === 'megas'
@@ -274,6 +297,7 @@
     go.onclick = () => exit(curMode); acts.appendChild(go);
     if (curMode !== 'megas') { const ag = document.createElement('button'); ag.className = 'ghost small'; ag.textContent = '再练一次'; ag.onclick = () => start(curMode); acts.appendChild(ag); }
     b.classList.remove('hidden');
+    setTimeout(() => go.focus(), 0);
   }
 
   function onRender(g) {
@@ -285,7 +309,12 @@
 
   // ---------------------------------------------------------------- lifecycle
   function onReflow() { positionSpot(); }
-  function onTutorialKey(e) { if (e.key === 'Escape' && active) exit(); }
+  function onTutorialKey(e) {
+    if (e.key !== 'Escape' || !active) return;
+    const dialog = document.querySelector('.modal:not(.hidden),#inspect:not(.hidden)');
+    if (dialog) return; // the top-most dialog owns Escape
+    exit();
+  }
   function addListeners() { window.addEventListener('scroll', onReflow, true); window.addEventListener('resize', onReflow); document.addEventListener('keydown', onTutorialKey); }
   function removeListeners() { window.removeEventListener('scroll', onReflow, true); window.removeEventListener('resize', onReflow); document.removeEventListener('keydown', onTutorialKey); }
 
@@ -318,8 +347,8 @@
   }
   function exit(enableMode) {
     stop(); PS.backToSetup();
-    if (enableMode === 'pokemart') { const el = document.getElementById('opt-pokemart'); if (el) el.checked = true; }
-    if (enableMode === 'megas') { const el = document.getElementById('opt-megas'); if (el) el.checked = true; }
+    if (enableMode === 'pokemart') { const el = document.getElementById('opt-pokemart'); if (el) { el.checked = true; el.dispatchEvent(new Event('change')); } }
+    if (enableMode === 'megas') { const el = document.getElementById('opt-megas'); if (el) { el.checked = true; el.dispatchEvent(new Event('change')); } }
   }
 
   window.Tutorial = { start, stop, onRender, active: () => active };

@@ -6,7 +6,7 @@ BACKS.push('./assets/backs/pokemart-1.png', './assets/backs/pokemart-2.png', './
 const AVATARS = ['ash', 'misty', 'brock', 'rocket'].map(a => `./assets/avatars/${a}.png`);
 const SHELL = [
   './', './index.html', './css/style.css',
-  './js/cards.js', './js/megas.js', './js/pokemart.js', './js/engine.js', './js/ai.js', './js/vsearch.js', './js/azai.js', './js/ui.js', './js/tutorial.js',
+  './js/cards.js', './js/megas.js', './js/pokemart.js', './js/engine.js', './js/ai.js', './js/vsearch.js', './js/azai.js', './js/net.js', './js/ai.worker.js', './js/ui.js', './js/tutorial.js',
   './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png',
   ...BALLS, ...BACKS, ...AVATARS,
 ];

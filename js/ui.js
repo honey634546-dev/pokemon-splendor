@@ -4,8 +4,58 @@
   const E = window.Engine, AI = window.AI, DB = window.CARD_DB;
   const MEGA_DB = window.MEGA_DB || [];
   const POKEMART_DB = window.POKEMART_DB || [];
-  // 究极 difficulty: determinized MCTS budget (validated ~57.5% vs 高手 at sims=200/dets=3 over 200 games).
-  const ULTRA_CFG = { sims: 200, dets: 3 };
+  // 究极 difficulty: single-tree determinized MCTS (vsearch v2), TIME-based budget.
+  // The web worker + the AI "thinking" pause hide the latency completely, so we
+  // spend real time: ~900ms ≈ 2500-3000 sims on desktop (auto-scales down on
+  // slower phones — same latency, fewer sims, still ≥ the old 200-sim budget).
+  // Validated: v2 at equal wall-clock beats the old 200/3 config 61.7% (37/60,
+  // p<.05); budget scaling adds more (2000-vs-600 sims: 58%). 3-4p still falls
+  // back to the heuristic: even with oppK pruning the search measured 29.4% at
+  // 3p / 15.6% at 4p (fair 33.3%/25%) — the multiplayer lever is an eval refit,
+  // not more search (see test/vsearch_mp.js).
+  const ULTRA_CFG = { timeMs: 900 };
+
+  // --- AI web worker: heavy searches run OFF the main thread (no UI freeze). ---
+  // ui posts a static-stripped state; the worker (js/ai.worker.js) loads the same
+  // engine/AI files, reattaches the card DBs, and returns the plan. Any failure
+  // (no Worker support, load error, crash) falls back to the old synchronous path.
+  let aiWorker = null, aiJobSeq = 0;
+  const aiJobs = {};
+  function getAIWorker() {
+    if (aiWorker !== null) return aiWorker;               // Worker | false (known-unavailable)
+    try {
+      aiWorker = new Worker('js/ai.worker.js');
+      aiWorker.onmessage = (e) => {
+        const m = e.data || {}, j = aiJobs[m.id];
+        if (!j) return;
+        delete aiJobs[m.id];
+        if (m.error || !m.plan) j.fail(); else j.ok(m.plan);
+      };
+      aiWorker.onerror = () => {                          // worker died → fail all pending, disable
+        for (const id in aiJobs) { aiJobs[id].fail(); delete aiJobs[id]; }
+        try { aiWorker.terminate(); } catch (e) { }
+        aiWorker = false;
+      };
+    } catch (e) { aiWorker = false; }
+    return aiWorker;
+  }
+  // Promise<plan> for a turn: kind = 'ultra' (VSearch+opts) or a heuristic difficulty.
+  // `state` defaults to the live G (also used with determinized states for takeover).
+  function aiComputeAsync(kind, opts, state) {
+    const s = state || G;
+    const sync = () => (kind === 'ultra' && window.VSearch)
+      ? VSearch.chooseTurn(s, opts || ULTRA_CFG)
+      : AI.chooseTurn(s, { difficulty: kind || 'hard' });
+    const w = getAIWorker();
+    if (!w) return Promise.resolve(sync());
+    const { cardDB, byId: _b, megaDB, pokemartDB, _byName, log, ...dyn } = s;  // strip statics/caches
+    const id = ++aiJobSeq;
+    return new Promise((resolve) => {
+      aiJobs[id] = { ok: resolve, fail: () => resolve(sync()) };
+      try { w.postMessage({ id, kind, g: dyn, opts }); }
+      catch (e) { delete aiJobs[id]; resolve(sync()); }
+    });
+  }
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const BALL_NAMES = { red: '精灵球', blue: '超级球', black: '高级球', pink: '治愈球', yellow: '先机球', purple: '大师球' };
@@ -35,13 +85,13 @@
            <option value="human">真人</option>
            <option value="ai">电脑</option>
          </select>
-         <select data-diff="${i}" aria-label="${i + 1}号位电脑难度">
-           <option value="hard">高手</option>
-           <option value="ultra">究极(最强·搜索)</option>
-           <option value="normal">普通</option>
-           <option value="easy">新手</option>
-           <option value="alphazero">AlphaZero(实验)</option>
-         </select>`;
+          <select data-diff="${i}" aria-label="${i + 1}号位电脑难度">
+            <option value="normal">普通（推荐）</option>
+            <option value="easy">新手</option>
+            <option value="hard">高手</option>
+            <option value="ultra">究极（最强·搜索）</option>
+            <option value="alphazero">AlphaZero(实验)</option>
+          </select>`;
       seats.appendChild(div);
       $(`[data-kind="${i}"]`, div).value = def;
       const syncDiff = () => { $(`[data-diff="${i}"]`, div).style.display = $(`[data-kind="${i}"]`, div).value === 'ai' ? '' : 'none'; };
@@ -68,18 +118,21 @@
     UI = { pick: [], selCard: null, selDeck: null, phase: 'main', busy: false, humans: (opts.humans != null ? opts.humans : 1), hasAI: !!opts.hasAI };
     undoStack = [];
     $('#setup').classList.add('hidden');
+    $('#setup').inert = false;
     if ($('#rules-modal')) $('#rules-modal').classList.add('hidden');
-    $('#game').classList.remove('hidden');
+    $('#game').inert = false; $('#game').classList.remove('hidden');
     $('#win-modal').classList.add('hidden');
     render();
     beginTurn();
   }
   function backToSetup() {
     gameEpoch++; UI.busy = false;
-    document.body.classList.remove('has-card-selection');
-    $('#game').classList.add('hidden');
+    document.body.classList.remove('has-card-selection', 'tutorial-choice-open');
+    $('#game').inert = false; $('#game').classList.add('hidden');
     $('#win-modal').classList.add('hidden');
-    $('#setup').classList.remove('hidden');
+    const pass = $('#pass-overlay'); if (pass) pass.classList.add('hidden');
+    $('#setup').inert = false; $('#setup').classList.remove('hidden');
+    syncSetupGoal(); syncTutorialProgress();
   }
 
   // ============================ online multiplayer ============================
@@ -120,7 +173,7 @@
     const r = UI.net.roster || [];
     const rr = $('#lobby-roster');
     if (rr) rr.innerHTML = r.length
-      ? r.map(p => `<div class="lr-row"><span class="lr-dot ${p.connected ? 'on' : 'off'}"></span>${p.seat + 1}. ${p.name}${p.seat === 0 ? ' 👑' : ''}${p.seat === UI.net.seat ? '（你）' : ''}</div>`).join('')
+      ? r.map(p => `<div class="lr-row"><span class="lr-dot ${p.connected ? 'on' : 'off'}" aria-hidden="true"></span>${p.seat + 1}. ${p.name}${p.seat === 0 ? ' 👑' : ''}${p.seat === UI.net.seat ? '（你）' : ''}<span class="sr-only">，${p.connected ? '在线' : '已断线'}</span></div>`).join('')
       : '<div class="muted">等待玩家加入…</div>';
     const start = $('#lobby-start');
     if (start) { start.style.display = UI.net.host ? '' : 'none'; start.disabled = !(r.length >= 2); }
@@ -187,7 +240,7 @@
     if (msLeft <= 0 && !UI.net.takeoverBusy && UI.net.host && !myTurn()) {
       UI.net.takeoverBusy = true;
       setTimeout(() => { if (UI.net && UI.net.takeoverBusy) UI.net.takeoverBusy = false; }, 6000); // safety: never stick
-      setTimeout(() => { try { if (window.Net) Net.send({ t: 'takeover', plan: computeTakeoverPlan() }); } catch (e) { } }, 30);
+      setTimeout(() => { computeTakeoverPlan().then((plan) => { try { if (window.Net) Net.send({ t: 'takeover', plan }); } catch (e) { } }); }, 30);
     }
   }
   // Reconstruct a plausible FULL state from our redacted view so the AI can run:
@@ -232,14 +285,16 @@
     }
     return d;
   }
+  // async: the heavy search runs in the AI worker (host UI stays responsive)
   function computeTakeoverPlan() {
-    let plan = null;
+    const EMPTY = { action: null, discards: [], evolution: null };
     try {
       const det = determinizeForAI(G);
-      if (window.VSearch && det.numPlayers === 2) { try { plan = VSearch.chooseTurn(det, ULTRA_CFG); } catch (e) { plan = null; } }
-      if (!plan || !plan.action) plan = AI.chooseTurn(det, { difficulty: 'hard' });
-    } catch (e) { plan = null; }
-    return plan || { action: null, discards: [], evolution: null };
+      const kind = (window.VSearch && det.numPlayers === 2) ? 'ultra' : 'hard';
+      return aiComputeAsync(kind, ULTRA_CFG, det)
+        .then((p) => (p && p.action) ? p : aiComputeAsync('hard', undefined, det))
+        .catch(() => EMPTY);
+    } catch (e) { return Promise.resolve(EMPTY); }
   }
   // Derive the local UI phase from a snapshot. The board renders for everyone, but
   // you can only act on your own turn (interactable() also gates on myTurn()).
@@ -269,6 +324,20 @@
     g.players.forEach((p, i) => { p.diff = cfg.diff[i]; });
     if (cfg.diff.indexOf('alphazero') >= 0) loadPolicy();
     enterGame(g, { humans: cfg.ai.filter(x => !x).length, hasAI: cfg.ai.some(x => x) });
+  }
+  function syncSetupGoal() {
+    const goal = $('#setup-goal'), mega = $('#opt-megas');
+    if (!goal || !mega) return;
+    goal.textContent = mega.checked
+      ? 'Mega 挑战：达到 20 分、集齐 5 色永久折扣，并拥有至少 1 只 Mega 宝可梦！'
+      : '收集精灵球，捕捉并进化宝可梦，率先达到 18 分成为冠军训练家！';
+  }
+  function syncTutorialProgress() {
+    const ids = { base: '#tutorial-btn', megas: '#tutorial-mega-btn', pokemart: '#tutorial-pokemart-btn' };
+    for (const mode in ids) {
+      let done = false; try { done = localStorage.getItem('ps-tutorial-complete-' + mode) === '1'; } catch (e) { }
+      const btn = $(ids[mode]); if (btn) btn.classList.toggle('completed', done);
+    }
   }
 
   // ---------- local autosave: survive a refresh / re-open (single device) ----------
@@ -332,7 +401,7 @@
   const me = () => G.players[(isOnline() && UI.net.seat >= 0) ? UI.net.seat : G.turn];
   const isHuman = (pid) => !G.players[pid].isAI;
   const ball = (color, cls, label) =>
-    `<div class="ball ${color} ${cls || ''}" title="${BALL_NAMES[color]}">${label != null ? '' : ''}</div>`;
+    `<div class="ball ${color} ${cls || ''}" title="${BALL_NAMES[color]}" aria-hidden="true">${label != null ? '' : ''}</div>`;
   const acquireLabel = (card) => E.isPokemart(card) ? '购买道具' : '捕捉';
   function cardAriaLabel(card, aff) {
     const costs = E.ALL_TOKENS.filter(k => card.cost[k] > 0).map(k => `${card.cost[k]}${BALL_NAMES[k]}`).join('、');
@@ -364,7 +433,7 @@
     const focusKey = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focusKey : '';
     const rowScroll = {};
     $$('#field [data-row-key]').forEach(el => { rowScroll[el.dataset.rowKey] = el.scrollLeft; });
-    renderBanner(); renderField(); renderMyResources(); renderSupply(); renderActionBar(); renderPlayers(); renderLog();
+    renderBanner(); renderScoreStrip(); renderField(); renderMyResources(); renderSupply(); renderActionBar(); renderPlayers(); renderLog();
     document.body.classList.toggle('has-card-selection', !!UI.selCard && UI.phase === 'main');
     for (const key in rowScroll) { const el = $(`#field [data-row-key="${key}"]`); if (el) el.scrollLeft = rowScroll[key]; }
     if (focusKey) requestAnimationFrame(() => { const el = document.querySelector(`[data-focus-key="${focusKey}"]`); if (el) el.focus({ preventScroll: true }); });
@@ -385,20 +454,36 @@
     const b = E.bonuses(G, p);
     let chips = '';
     for (const c of E.COLORS) {
-      chips += `<div class="mychip"><div class="ball ${c} sm"></div><span class="mc-tok">${p.tokens[c]}</span><span class="mc-bon">+${b[c]}</span></div>`;
+      chips += `<div class="mychip" aria-label="${BALL_NAMES[c]}：手中 ${p.tokens[c]} 个，永久折扣 ${b[c]}">
+        <div class="ball ${c} sm" aria-hidden="true"></div>
+        <span class="mc-tok"><small>球</small>${p.tokens[c]}</span><span class="mc-bon"><small>折</small>${b[c]}</span>
+      </div>`;
     }
-    chips += `<div class="mychip"><div class="ball purple sm"></div><span class="mc-tok">${p.tokens.purple}</span></div>`;
-    if (G.megasEnabled) chips += `<div class="mychip"><div class="ball mega-token sm"></div><span class="mc-tok">${p.megaToken}</span></div>`;
-    host.innerHTML = `<span class="mc-label">我的资源 · ${p.name}</span><div class="mychips">${chips}</div>`;
+    chips += `<div class="mychip master" aria-label="大师球：手中 ${p.tokens.purple} 个"><div class="ball purple sm" aria-hidden="true"></div><span class="mc-tok"><small>球</small>${p.tokens.purple}</span></div>`;
+    if (G.megasEnabled) chips += `<div class="mychip mega" aria-label="Mega 代币：持有 ${p.megaToken} 个"><div class="ball mega-token sm" aria-hidden="true"></div><span class="mc-tok">${p.megaToken}</span></div>`;
+    host.innerHTML = `<span class="mc-label">我的资源 · ${p.name} · 球 ${E.tokenTotal(p)}/${E.TOKEN_MAX}</span><div class="mychips">${chips}</div>`;
   }
 
   function renderBanner() {
     const p = isOnline() ? G.players[G.turn] : me();
     let txt;
     if (G.phase === 'gameover') txt = '游戏结束';
-    else if (p.isAI) txt = `${p.name} 的回合 · <span class="thinking">思考中<span class="dot"></span><span class="dot"></span><span class="dot"></span></span>`;
-    else txt = `${p.name} 的回合${isOnline() && myTurn() ? '（你）' : ''}${G.lastRound ? ' · ⚠ 最后一轮' : ''}`;
+    else if (p.isAI) txt = `${p.name} · ${E.scoreOf(G, p)}分 · <span class="thinking">思考中<span class="dot"></span><span class="dot"></span><span class="dot"></span></span>`;
+    else txt = `${p.name} 的回合${isOnline() && myTurn() ? '（你）' : ''} · ${E.scoreOf(G, p)}分${G.lastRound ? ' · ⚠ 最后一轮' : ''}`;
     $('#turn-banner').innerHTML = txt;
+  }
+
+  function renderScoreStrip() {
+    const host = $('#score-strip'); if (!host || !G) return;
+    const target = G.megasEnabled ? E.MEGA_WIN_SCORE : E.WIN_SCORE;
+    host.innerHTML = G.players.map((p, i) => {
+      const score = E.scoreOf(G, p), balls = E.tokenTotal(p), active = i === G.turn && G.phase === 'play';
+      return `<div class="score-pill${active ? ' active' : ''}" data-player="${i}" role="listitem" ${active ? 'aria-current="true"' : ''}
+        aria-label="${p.name}：${score}/${target}分，持有${balls}个精灵球${active ? '，当前回合' : ''}">
+        <span class="score-dot" style="background:${SEAT_COLORS[i]}" aria-hidden="true"></span>
+        <span class="score-name">${p.name}</span><b>${score}</b><small>/${target}分</small><span class="score-balls">球${balls}</span>
+      </div>`;
+    }).join('');
   }
 
   function renderField() {
@@ -744,9 +829,11 @@
       // bonus + token chips
       let chips = '';
       for (const c of E.COLORS) {
-        chips += `<div class="chip">${ball(c, 'sm')}<span class="num">${p.tokens[c]}</span><span class="bonus-n">+${b[c]}</span></div>`;
+        chips += `<div class="chip" aria-label="${BALL_NAMES[c]}：手中 ${p.tokens[c]} 个，永久折扣 ${b[c]}">
+          ${ball(c, 'sm')}<span class="num"><small>球</small>${p.tokens[c]}</span><span class="bonus-n"><small>折</small>${b[c]}</span>
+        </div>`;
       }
-      chips += `<div class="chip">${ball('purple', 'sm')}<span class="num">${p.tokens.purple}</span></div>`;
+      chips += `<div class="chip master" aria-label="大师球：手中 ${p.tokens.purple} 个">${ball('purple', 'sm')}<span class="num">${p.tokens.purple}</span></div>`;
       // captured cards grouped by effective bonus color (Pokémart copy cards take
       // their associated colour; effect cards with no colour go in a final group).
       let stacks = '';
@@ -780,8 +867,8 @@
         `<div class="player-head">
            <div class="pavatar" style="background-color:${SEAT_COLORS[i]};background-image:url(${seatAvatar(i)});box-shadow:0 0 0 2px ${SEAT_COLORS[i]}"></div>
            <div class="pname">${p.name}</div>
-           <div class="ptokens${tot > E.TOKEN_MAX ? ' over' : tot === E.TOKEN_MAX ? ' full' : ''}" title="持有的精灵球总数（回合结束上限 ${E.TOKEN_MAX} 个）"><span class="pt-lbl">球</span>${tot}<small>/${E.TOKEN_MAX}</small></div>
-           <div class="pscore">${E.scoreOf(G, p)}<small>/${G.megasEnabled ? E.MEGA_WIN_SCORE : E.WIN_SCORE}</small></div>
+           <div class="ptokens${tot > E.TOKEN_MAX ? ' over' : tot === E.TOKEN_MAX ? ' full' : ''}" title="持有的精灵球总数（回合结束上限 ${E.TOKEN_MAX} 个）" aria-label="持有精灵球 ${tot}/${E.TOKEN_MAX}"><span class="pt-lbl">球</span>${tot}<small>/${E.TOKEN_MAX}</small></div>
+           <div class="pscore" aria-label="${E.scoreOf(G, p)}分，目标${G.megasEnabled ? E.MEGA_WIN_SCORE : E.WIN_SCORE}分">${E.scoreOf(G, p)}<small>/${G.megasEnabled ? E.MEGA_WIN_SCORE : E.WIN_SCORE}</small></div>
          </div>
          ${p.buried.length ? `<div class="buried-badge">已进化 ${p.buried.length}</div>` : ''}
          <div class="pstats">${chips}</div>
@@ -793,24 +880,44 @@
 
   function renderLog() {
     const lines = G.log.slice(-40).map(l => `<div class="ln">${l.msg}</div>`).join('');
-    const box = $('#log-lines'); box.innerHTML = lines; box.scrollTop = box.scrollHeight;
+    const box = $('#log-lines');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+    const prevTop = box.scrollTop;
+    if (box.dataset.logHtml === lines) return; // selecting a card must not reset log reading position
+    box.innerHTML = lines;
+    box.dataset.logHtml = lines;
+    if (atBottom || !box.dataset.hadLog) box.scrollTop = box.scrollHeight;
+    else box.scrollTop = prevTop;
+    box.dataset.hadLog = '1';
   }
 
   // ---------------------------------------------------------------- interactions
   function onSupplyClick(color) {
     if (!interactable()) return;
-    if (canAddBall(color)) { UI.pick.push(color); UI.selCard = UI.selDeck = null; render(); }
+    if (canAddBall(color)) {
+      UI.pick.push(color); UI.selCard = UI.selDeck = null; render();
+      if (validTakeSelection()) focusActionPanel();
+    }
   }
   function onCardClick(id) {
     if (!interactable() || UI.pick.length) return;
     if (byId[id] && byId[id].tier === 'mega') return; // Mega cards: zoom only; evolve at end of turn
-    UI.selCard = id; UI.selDeck = null; render();
+    UI.selCard = id; UI.selDeck = null; render(); focusActionPanel();
   }
   function onDeckClick(tier) {
     if (!interactable()) return;
-    UI.selDeck = tier; UI.selCard = null; render();
+    UI.selDeck = tier; UI.selCard = null; render(); focusActionPanel();
   }
   function interactable() { return G && G.phase === 'play' && UI.phase === 'main' && !G.acted && !me().isAI && !UI.busy && (!isOnline() || (myTurn() && !UI.net.pendingAction)); }
+  function focusActionPanel() {
+    requestAnimationFrame(() => {
+      const bar = $('#action-bar');
+      const primary = bar && bar.querySelector('button.primary:not(:disabled),button[data-act="reserve-card"]:not(:disabled),button:not(:disabled)');
+      if (!bar || !primary) return;
+      try { bar.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); } catch (e) { }
+      primary.focus({ preventScroll: true });
+    });
+  }
 
   // ---------------------------------------------------------------- animations
   const ANIM_MS = 620;
@@ -855,20 +962,54 @@
     return src;
   }
   function playGhosts(src, dec, pid) {
-    const panel = $$('#players .player')[pid];
+    let panel = $$('#players .player')[pid];
+    if (panel) {
+      const r = panel.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > innerHeight) {
+        const score = $(`#score-strip [data-player="${pid}"]`);
+        const dock = (pid === G.turn) ? $('#my-resources') : null;
+        panel = (score && score.offsetParent) ? score : (dock && dock.offsetParent ? dock : $('#turn-banner'));
+      }
+    }
     if (!panel) return;
     panel.classList.add('receiving'); setTimeout(() => panel.classList.remove('receiving'), 520);
     const dc = centerOf(panel);
     if (dec.type === 'take' || dec.type === 'takeMega') { for (const it of (src || [])) flyBall(it.color, it.rect, dc); }
     else if (dec.type === 'capture' || dec.type === 'reserve') { const it = (src || [])[0]; if (it) flyCard(it.img, it.rect, dc, it.tier); }
   }
+  function actionReceipt(dec, pid, before) {
+    const p = G.players[pid];
+    if (!dec || !p || !before) return '';
+    if (dec.type === 'take') {
+      const counts = {};
+      (dec.colors || []).forEach(c => counts[c] = (counts[c] || 0) + 1);
+      const got = Object.keys(counts).map(c => `${BALL_NAMES[c]}×${counts[c]}`).join('、');
+      return got ? `拿取成功：${got} · 当前 ${E.tokenTotal(p)}/${E.TOKEN_MAX} 个球` : '';
+    }
+    if (dec.type === 'capture') {
+      const card = byId[dec.cardId], gained = E.scoreOf(G, p) - before.score;
+      const paid = E.ALL_TOKENS.map(c => ({ c, n: before.tokens[c] - p.tokens[c] })).filter(x => x.n > 0)
+        .map(x => `${BALL_NAMES[x.c]}×${x.n}`).join('、');
+      return `${card && E.isPokemart(card) ? '购买' : '捕捉'}成功：${card ? card.name : '卡牌'}${gained ? ` · +${gained}分` : ''}${paid ? ` · 交出 ${paid}` : ' · 无需交球'}`;
+    }
+    if (dec.type === 'reserve') {
+      const name = dec.cardId && byId[dec.cardId] ? byId[dec.cardId].name : `${TIER_NAMES[dec.deck] || ''}牌堆顶`;
+      const masters = Math.max(0, p.tokens.purple - before.tokens.purple);
+      return `已保留 ${name}${masters ? ` · 获得${masters}个大师球` : ''}`;
+    }
+    return '';
+  }
   // capture source rects, apply mutation, render, animate ghosts to the player, then continue
   function applyAnimated(dec, pid, mutate, after) {
     const src = captureSrc(dec);
+    const bp = G.players[pid];
+    const before = { tokens: Object.assign({}, bp.tokens), score: E.scoreOf(G, bp) };
     const r = mutate();
     if (r && r.ok === false) { flashHint(r.error); return; }
     const epoch = gameEpoch;
     render(); playGhosts(src, dec, pid);
+    const receipt = actionReceipt(dec, pid, before);
+    if (receipt) flashHint(receipt, 'success');
     setTimeout(() => { if (epoch === gameEpoch) after(); }, ANIM_MS);   // skip if game changed (undo/new game)
   }
 
@@ -901,6 +1042,7 @@
       const returnFocus = document.activeElement;
       $('#choice-title').textContent = o.title;
       $('#choice-hint').textContent = o.hint || '';
+      confirm.textContent = o.confirmLabel || '确认选择';
       const progress = $('#choice-progress');
       const wrap = $('#choice-cards'); wrap.innerHTML = '';
       const count = o.count, sel = [];
@@ -916,6 +1058,7 @@
         const el = document.createElement('div');
         el.className = 'choice-card' + (E.isPokemart(c) ? ' pm-choice' : ''); el.dataset.id = id; el.dataset.zoom = c.img;
         el.tabIndex = 0; el.setAttribute('role', 'checkbox'); el.setAttribute('aria-checked', 'false');
+        el.setAttribute('aria-label', `${c.name}，${TIER_NAMES[c.tier]}，${c.vp}分${color ? `，${BALL_NAMES[color]}奖励` : ''}`);
         el.innerHTML = `<img src="${c.img}" alt=""><span>${c.name}</span><small>${TIER_NAMES[c.tier]} · ${c.vp}分${color ? ` · ${BALL_NAMES[color]}奖励` : ''}</small>`;
         const toggle = () => {
           const i = sel.indexOf(id);
@@ -933,14 +1076,23 @@
         wrap.appendChild(el);
       });
       update();
-      const onKey = (e) => { if (e.key === 'Escape') no(); };
-      const close = (val) => { modal.classList.add('hidden'); confirm.removeEventListener('click', ok); cancel.removeEventListener('click', no); document.removeEventListener('keydown', onKey); if (returnFocus && returnFocus.focus) returnFocus.focus({ preventScroll: true }); resolve(val); };
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); no(); } };
+      const close = (val) => {
+        modal.classList.add('hidden'); document.body.classList.remove('tutorial-choice-open');
+        const game = $('#game'); if (game) game.inert = false;
+        confirm.removeEventListener('click', ok); cancel.removeEventListener('click', no); document.removeEventListener('keydown', onKey);
+        if (returnFocus && returnFocus.focus) returnFocus.focus({ preventScroll: true });
+        resolve(val);
+      };
       const ok = () => { if (sel.length === count) close(sel.slice()); };
       const no = () => close(null);
       confirm.addEventListener('click', ok); cancel.addEventListener('click', no);
+      document.body.classList.toggle('tutorial-choice-open', !!(window.Tutorial && Tutorial.active && Tutorial.active()));
+      const game = $('#game'); if (game) game.inert = true;
       modal.classList.remove('hidden');
       document.addEventListener('keydown', onKey);
-      cancel.focus();
+      const firstChoice = wrap.querySelector('.choice-card');
+      (firstChoice || cancel).focus();
     });
   }
   async function gatherCaptureOpts(card) {
@@ -951,7 +1103,7 @@
       let need = -1;
       for (let k = 0; k <= dex.length; k++) if (E.computePayment(G, p, card, k * 2).ok) { need = k; break; }
       if (need > 0) {
-        const sel = await pickCards({ title: '弃用图鉴抵款', hint: `弃 ${need} 张图鉴，各抵 2 个万能球以获得这张卡`, candidates: dex, count: need });
+        const sel = await pickCards({ title: '弃用图鉴抵款', hint: `弃 ${need} 张图鉴，各抵 2 个万能球以获得这张卡`, candidates: dex, count: need, confirmLabel: `弃用 ${need} 张并继续` });
         if (!sel) return null;
         opts.spendPokedex = sel;
       }
@@ -959,7 +1111,7 @@
     // 2) copy association (TM / RARE CANDY)
     if (card.effect === 'copy' || card.effect === 'copy_free') {
       const cands = p.board.filter(id => E.effBonusColor(G, p, id));
-      const sel = await pickCards({ title: '复制折扣（技能机 / 神奇糖果）', hint: '选择一张卡，本卡永久视同其奖励颜色', candidates: cands, count: 1 });
+      const sel = await pickCards({ title: '复制折扣（技能机 / 神奇糖果）', hint: '选择一张卡，本卡永久视同其奖励颜色', candidates: cands, count: 1, confirmLabel: '复制该奖励' });
       if (!sel) return null;
       opts.copyTargetId = sel[0];
     }
@@ -967,7 +1119,7 @@
     if (card.effect === 'discard_buy') {
       const col = card.effectParam.discardColor, n = card.effectParam.discardCount;
       const cands = p.board.filter(id => E.effBonusColor(G, p, id) === col);
-      const sel = await pickCards({ title: '驱虫喷雾', hint: `弃掉 ${n} 张${BALL_NAMES[col]}卡以获得本卡（不付精灵球）`, candidates: cands, count: n });
+      const sel = await pickCards({ title: '驱虫喷雾', hint: `弃掉 ${n} 张${BALL_NAMES[col]}卡以获得本卡（不付精灵球）`, candidates: cands, count: n, confirmLabel: `弃掉 ${n} 张并购买` });
       if (!sel) return null;
       opts.discardCards = sel;
     }
@@ -984,12 +1136,12 @@
     const cands = [];
     for (const t of E.freeTiers(parentCard)) for (const id of (G.field[t] || [])) if (id && E.freeTakeable(G, p, byId[id])) cands.push(id);
     if (!cands.length) { flashHint('场上没有符合条件的免费卡，本次免费取卡效果略过', 'info'); return { freeTakeId: undefined }; }
-    const sel = await pickCards({ title: '免费获得一张卡', hint: '立即免费获得（不付其成本），结算其效果', candidates: cands, count: 1 });
+    const sel = await pickCards({ title: '免费获得一张卡', hint: '立即免费获得（不付其成本），结算其效果', candidates: cands, count: 1, confirmLabel: '免费获得这张卡' });
     if (!sel) return null;
     const freeId = sel[0], fc = byId[freeId], freeOpts = {};
     if (E.isPokemart(fc) && (fc.effect === 'copy' || fc.effect === 'copy_free')) {
       const cc = p.board.filter(id => E.effBonusColor(G, p, id));
-      const cp = await pickCards({ title: `关联「${fc.name}」`, hint: '为免费获得的卡选择复制奖励的卡', candidates: cc, count: 1 });
+      const cp = await pickCards({ title: `关联「${fc.name}」`, hint: '为免费获得的卡选择复制奖励的卡', candidates: cc, count: 1, confirmLabel: '复制该奖励' });
       if (!cp) return null;
       freeOpts.copyTargetId = cp[0];
     }
@@ -1049,12 +1201,14 @@
     if (isOnline()) { sendNetAction({ type: 'evolve', fromId, toId }, '正在提交进化…'); render(); return; }
     const r = E.actionEvolve(G, fromId, toId);
     if (!r.ok) { flashHint(r.error); return; }
+    flashHint(`进化成功：${byId[fromId].name} → ${byId[toId].name}`, 'success');
     endTurn();
   }
   function doMegaEvolve(megaId, fromId) {
     if (isOnline()) { sendNetAction({ type: 'megaEvolve', megaId, fromId }, '正在提交超级进化…'); render(); return; }
     const r = E.actionMegaEvolve(G, megaId, fromId);
     if (!r.ok) { flashHint(r.error); return; }
+    flashHint(`超级进化成功：${byId[fromId].name} → ${byId[megaId].name}`, 'success');
     endTurn();
   }
   function doTakeMega() {
@@ -1062,6 +1216,7 @@
     if (isOnline()) { sendNetAction({ type: 'takeMega' }, '正在提交 Mega 代币…'); render(); return; }
     const r = E.actionTakeMega(G);
     if (!r.ok) { flashHint(r.error); return; }
+    flashHint('获得 1 枚 Mega 代币', 'success');
     afterMainAction();
   }
 
@@ -1100,12 +1255,21 @@
 
   function showPassOverlay(p) {
     let ov = $('#pass-overlay');
-    if (!ov) { ov = document.createElement('div'); ov.id = 'pass-overlay'; document.body.appendChild(ov); }
+    if (!ov) {
+      ov = document.createElement('div'); ov.id = 'pass-overlay';
+      ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true'); ov.setAttribute('aria-labelledby', 'pass-title');
+      document.body.appendChild(ov);
+    }
     ov.innerHTML = `<div class="po-inner"><div class="pavatar" style="margin:0 auto 14px;width:56px;height:56px;background-color:${SEAT_COLORS[G.turn]};background-image:url(${seatAvatar(G.turn)});box-shadow:0 0 0 3px ${SEAT_COLORS[G.turn]}"></div>
-      <h2>请将设备交给<br>${p.name}</h2><p>（其他玩家的保留区将被隐藏）</p>
+      <h2 id="pass-title">请将设备交给<br>${p.name}</h2><p>其他玩家的保留区会保持隐藏</p>
       <button class="primary" id="ready-btn" style="margin-top:16px;padding:12px 30px">我准备好了</button></div>`;
+    const game = $('#game'); if (game) game.inert = true;
     ov.classList.remove('hidden');
-    $('#ready-btn').onclick = () => { ov.classList.add('hidden'); render(); };
+    $('#ready-btn').onclick = () => {
+      ov.classList.add('hidden'); if (game) game.inert = false; render();
+      requestAnimationFrame(() => { const first = $('#supply [role="button"]'); if (first) first.focus({ preventScroll: true }); });
+    };
+    $('#ready-btn').focus();
     renderBanner();
   }
 
@@ -1127,7 +1291,13 @@
     // so use a short artificial pacing for it instead of the full 1.7–3.2s.
     const isUltra = p.diff === 'ultra' && window.VSearch && G.numPlayers === 2;
     const think = isUltra ? (250 + Math.random() * 250) : (1700 + Math.random() * 1500);
-    setTimeout(() => {
+    // Start the heavy search NOW, in the worker, so it runs DURING the "thinking"
+    // pause instead of freezing the UI after it. AZ seats keep their own sync path.
+    const fallbackDiff = (p.diff === 'alphazero' || p.diff === 'ultra') ? 'hard' : (p.diff || 'hard');
+    const planPromise = (p.diff === 'alphazero' && window.AZAI && AZAI.hasWeights())
+      ? null
+      : aiComputeAsync(isUltra ? 'ultra' : fallbackDiff, isUltra ? ULTRA_CFG : undefined);
+    setTimeout(async () => {
       if (epoch !== gameEpoch) return;                // game was replaced/undone mid-think — drop this timer
       if (!G || G.phase === 'gameover') { UI.busy = false; return; }
       let dec = null, applyFn = null;
@@ -1140,16 +1310,19 @@
         }
       }
       if (!applyFn) {                                  // heuristic / 究极-search (default seat, or AZ fallback)
-        const fallbackDiff = (p.diff === 'alphazero' || p.diff === 'ultra') ? 'hard' : (p.diff || 'hard');
-        const plan = isUltra
-          ? VSearch.chooseTurn(G, ULTRA_CFG)            // determinized MCTS, heuristic prior+leaf (2p only)
-          : AI.chooseTurn(G, { difficulty: fallbackDiff });
+        const plan = planPromise ? await planPromise
+          : AI.chooseTurn(G, { difficulty: fallbackDiff });   // AZ seat whose net move failed
+        if (epoch !== gameEpoch) return;               // undo/new-game while the worker searched
+        if (!G || G.phase === 'gameover') { UI.busy = false; return; }
+        // Megas moves (takeMega action, mega evolution) now come from the plan
+        // itself: legalActions enumerates takeMega and AI.manage weighs mega vs
+        // normal evolution — no UI bolt-ons, so search and reality stay in sync.
         dec = decodePlan(plan);
         applyFn = () => {
           if (plan.action) E.applyAction(G, plan.action); else E.actionPass(G);
           for (const c of plan.discards) E.actionDiscard(G, c);
-          if (!G.evolvedThisTurn && plan.megaEvolution) E.actionMegaEvolve(G, plan.megaEvolution.megaId, plan.megaEvolution.fromId);
-          if (!G.evolvedThisTurn && plan.evolution) E.actionEvolve(G, plan.evolution.fromId, plan.evolution.toId);
+          if (plan.megaEvolution && !G.evolvedThisTurn) E.actionMegaEvolve(G, plan.megaEvolution.megaId, plan.megaEvolution.fromId);
+          else if (plan.evolution && !G.evolvedThisTurn) E.actionEvolve(G, plan.evolution.fromId, plan.evolution.toId);
           E.endTurn(G);
         };
       }
@@ -1209,10 +1382,16 @@
     $('#inspect-img').src = src;
     $('#inspect-img').alt = altText || '卡牌详情';
     $('#inspect-actions').innerHTML = (actionsHtml || '') + `<button class="ghost" data-inspect-close>关闭</button>`;
+    const game = $('#game'); if (game) game.inert = true;
     ov.classList.remove('hidden');
     $('[data-inspect-close]', ov).focus();
   }
-  function closeInspect() { const ov = $('#inspect'); if (ov) ov.classList.add('hidden'); if (inspectReturnFocus && inspectReturnFocus.focus) inspectReturnFocus.focus({ preventScroll: true }); inspectReturnFocus = null; }
+  function closeInspect() {
+    const ov = $('#inspect'); if (ov) ov.classList.add('hidden');
+    const game = $('#game'); if (game) game.inert = false;
+    if (inspectReturnFocus && inspectReturnFocus.focus) inspectReturnFocus.focus({ preventScroll: true });
+    inspectReturnFocus = null;
+  }
   // build capture/reserve buttons for the inspect overlay, if the card is actionable now
   function inspectActionsFor(id) {
     if (!interactable()) return '';
@@ -1228,13 +1407,13 @@
   // keep --dock-h in sync with the fixed mobile control dock so scroll content clears it
   function syncDockH() {
     const dock = $('#controls'); if (!dock) return;
-    const onMobile = matchMedia('(max-width:860px)').matches;
+    const onMobile = matchMedia('(max-width:999px)').matches;
     document.documentElement.style.setProperty('--dock-h', onMobile ? dock.offsetHeight + 'px' : '0px');
   }
   function trackDock() {
     const dock = $('#controls'); if (!dock) return;
     if (window.ResizeObserver) new ResizeObserver(syncDockH).observe(dock);
-    const mq = matchMedia('(max-width:860px)');
+    const mq = matchMedia('(max-width:999px)');
     (mq.addEventListener ? mq.addEventListener('change', syncDockH) : mq.addListener && mq.addListener(syncDockH));
     window.addEventListener('resize', syncDockH, { passive: true });
     window.addEventListener('orientationchange', syncDockH);
@@ -1268,6 +1447,8 @@
       b.setAttribute('aria-pressed', 'true');
     });
     $('#start-btn').addEventListener('click', startGame);
+    if ($('#opt-megas')) $('#opt-megas').addEventListener('change', syncSetupGoal);
+    syncSetupGoal(); syncTutorialProgress();
     // online lobby
     if ($('#online-create')) $('#online-create').addEventListener('click', () => openOnline(makeRoomCode(), true));
     if ($('#online-join')) $('#online-join').addEventListener('click', () => { const c = prompt('输入房间码：'); if (c) openOnline(c, false); });
@@ -1282,8 +1463,13 @@
     if ($('#tutorial-pokemart-btn')) $('#tutorial-pokemart-btn').addEventListener('click', () => { if (window.Tutorial) Tutorial.start('pokemart'); });
     $('#undo-btn').addEventListener('click', doUndo);
     let rulesReturnFocus = null;
-    const closeRules = () => { $('#rules-modal').classList.add('hidden'); if (rulesReturnFocus) rulesReturnFocus.focus({ preventScroll: true }); rulesReturnFocus = null; };
-    $('#rules-btn').addEventListener('click', () => { rulesReturnFocus = document.activeElement; $('#rules-modal').classList.remove('hidden'); $('.close-rules').focus(); });
+    const closeRules = () => {
+      $('#rules-modal').classList.add('hidden'); $('#setup').inert = false;
+      if (rulesReturnFocus) rulesReturnFocus.focus({ preventScroll: true }); rulesReturnFocus = null;
+    };
+    $('#rules-btn').addEventListener('click', () => {
+      rulesReturnFocus = document.activeElement; $('#setup').inert = true; $('#rules-modal').classList.remove('hidden'); $('#rules-title').focus();
+    });
     $('#rules-modal').addEventListener('click', (e) => { if (e.target.id === 'rules-modal' || e.target.classList.contains('close-rules')) closeRules(); });
     $('#menu-btn').addEventListener('click', () => {
       const inTut = window.Tutorial && Tutorial.active && Tutorial.active();
@@ -1340,7 +1526,7 @@
     // own-reserve capture: clicking a revealed reserve mini-card selects it
     $('#players').addEventListener('click', (e) => {
       const mc = e.target.closest('[data-reserve-capture]');
-      if (mc && interactable()) { UI.selCard = mc.dataset.reserveCapture; UI.selDeck = null; UI.pick = []; render(); return; }
+      if (mc && interactable()) { UI.selCard = mc.dataset.reserveCapture; UI.selDeck = null; UI.pick = []; render(); focusActionPanel(); return; }
       // any other captured/opponent card: tap to enlarge & read
       const z = e.target.closest('[data-zoom]');
       if (z && z.dataset.zoom) openInspect(z.dataset.zoom, '', z.getAttribute('aria-label') || '卡牌详情');

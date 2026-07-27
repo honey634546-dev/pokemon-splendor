@@ -15,7 +15,7 @@
   --sa-b:env(safe-area-inset-bottom,0px);
   --sa-l:env(safe-area-inset-left,0px);
   --dock-h:0px;                 /* live height of the mobile control dock (set by JS) */
-  --app-h:100vh; --app-h:100svh;/* small-viewport height: fits on first paint, no jump */
+  --app-h:100vh; --app-h:100svh; --app-h:100dvh;/* follow the visible mobile viewport */
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -34,6 +34,7 @@ body{
 }
 .screen{min-height:100vh;min-height:var(--app-h)}
 .hidden{display:none !important}
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 
 /* touch hygiene: instant taps, no accidental text-select / long-press callout on controls */
 button,.seg button,.supply-row,.card,.deck-pile,.mini-card,.ball,.chip,.evo-option,.seat .pid,#undo-btn,.exp-toggle{
@@ -45,6 +46,7 @@ button,.seg button,.supply-row,.card,.deck-pile,.mini-card,.ball,.chip,.evo-opti
 button{font-family:inherit;cursor:pointer;border:none;border-radius:10px;font-size:14px;padding:10px 14px;min-height:40px;transition:.15s transform,.15s background,.15s box-shadow}
 button:active{transform:translateY(1px)}
 .primary{background:linear-gradient(180deg,#ffd54a,#f6b800);color:#3a2a00;font-weight:800;box-shadow:0 4px 0 #b88600}
+.tutorial-featured{background:linear-gradient(135deg,#fff0a8,#ffd54a 55%,#f6b800);color:#3a2a00;font-weight:900;border:1px solid #ffe98b;box-shadow:0 4px 0 #a87700}
 .ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
 .small{padding:7px 11px;font-size:13px;min-height:34px}
 button:disabled{opacity:.45;cursor:not-allowed}
@@ -56,7 +58,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 /* ---------- setup ---------- */
 #setup,#lobby{display:grid;place-items:center;padding:max(16px,var(--sa-t)) max(16px,var(--sa-r)) max(16px,var(--sa-b)) max(16px,var(--sa-l))}
-.setup-card{background:rgba(20,25,70,.82);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:20px;padding:clamp(20px,5vw,34px);max-width:560px;width:100%;box-shadow:var(--shadow)}
+.setup-card{background:linear-gradient(155deg,rgba(28,35,92,.92),rgba(18,22,61,.88));backdrop-filter:blur(10px);border:1px solid rgba(106,118,215,.55);border-radius:22px;padding:clamp(20px,5vw,34px);max-width:580px;width:100%;box-shadow:0 22px 70px rgba(3,5,20,.5),inset 0 1px rgba(255,255,255,.06)}
 .brand{font-size:clamp(26px,8vw,40px);margin:0 0 6px;text-align:center;letter-spacing:1px;line-height:1.1}
 .brand-splendor{color:var(--gold);text-shadow:0 2px 0 #9a6b00}
 .brand-dot{margin:0 6px;color:var(--muted)}
@@ -106,6 +108,13 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .setup-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:6px}
 .setup-actions .primary{padding:13px 30px;font-size:16px}
 .setup-actions .ghost{padding:13px 24px}
+.academy{margin-top:14px;padding:13px;border:1px solid rgba(255,213,74,.32);border-radius:15px;background:linear-gradient(120deg,rgba(255,213,74,.09),rgba(122,79,192,.11))}
+.academy-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.academy-head>div{display:flex;flex-direction:column;gap:2px}.academy-head strong{color:var(--gold);font-size:14px}.academy-head div span{color:var(--muted);font-size:11px}
+.academy-time{flex:none;color:#d9defc;font-size:10.5px;background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:999px;padding:4px 8px}
+.setup-tutorials{margin-top:0}.setup-tutorials button{padding:11px 13px;min-height:48px}.setup-tutorials button small{display:block;font-size:9.5px;margin-top:2px;opacity:.75}
+.setup-tutorials button.completed{border-color:var(--good);box-shadow:inset 0 0 0 1px rgba(70,209,122,.18)}
+.setup-tutorials button.completed::after{content:"  ✓ 已完成";color:var(--good);font-size:10px;font-weight:800}
 .credit{margin-top:18px;text-align:center;color:var(--muted);font-size:12px;opacity:.7;line-height:1.5}
 .exp-toggle{display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--muted);line-height:1.5;cursor:pointer;flex:1 1 100%}
 .exp-toggle input{width:20px;height:20px;flex:none;margin-top:1px;accent-color:var(--gold)}
@@ -119,8 +128,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 @media(max-width:520px){.exp-picker{grid-template-columns:1fr}.exp-card{padding:11px}.setup-card{padding:20px 16px}}
 
 /* ---------- modal ---------- */
-.modal{position:fixed;inset:0;background:rgba(6,8,24,.7);display:grid;place-items:center;z-index:60;padding:max(16px,var(--sa-t)) 16px max(16px,var(--sa-b))}
-.modal-box{background:var(--bg1);border:1px solid var(--line);border-radius:18px;padding:clamp(18px,4vw,28px);max-width:640px;width:100%;box-shadow:var(--shadow);max-height:88svh;overflow:auto}
+.modal{position:fixed;inset:0;background:rgba(6,8,24,.76);display:grid;place-items:center;z-index:60;padding:max(16px,var(--sa-t)) 16px max(16px,var(--sa-b))}
+.modal-box{background:var(--bg1);border:1px solid var(--line);border-radius:18px;padding:clamp(18px,4vw,28px);max-width:640px;width:100%;box-shadow:0 22px 70px rgba(0,0,0,.6);max-height:88svh;max-height:88dvh;overflow:auto}
 .modal-box h2{margin:0 0 14px;color:var(--gold)}
 .rules-body{line-height:1.7;color:var(--ink);font-size:clamp(14px,3.6vw,16px)}
 .rules-body ul{margin:6px 0 6px 0;padding-left:20px}
@@ -131,16 +140,21 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 /* ---------- game shell ---------- */
 #game{min-height:var(--app-h)}
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:calc(8px + var(--sa-t)) max(14px,var(--sa-r)) 8px max(14px,var(--sa-l));background:rgba(10,13,40,.78);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30;backdrop-filter:blur(6px)}
-.brand-mini{font-weight:800;color:var(--gold);letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:calc(8px + var(--sa-t)) max(14px,var(--sa-r)) 8px max(14px,var(--sa-l));background:rgba(10,13,40,.88);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30;backdrop-filter:blur(10px)}
+.brand-mini{display:block;max-width:240px;font-weight:800;color:var(--gold);letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #turn-banner{font-weight:800;font-size:clamp(13px,3.6vw,16px);padding:6px 14px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);text-align:center;flex:1 1 auto;min-width:0}
-.topbar-left,.topbar-right{flex:0 0 auto}
+.topbar-left,.topbar-right{flex:0 1 auto;min-width:0}
+#score-strip{display:none}
+.score-pill{display:flex;align-items:center;gap:5px;min-width:0;padding:5px 9px;border:1px solid var(--line);border-radius:999px;background:rgba(17,22,58,.82);font-size:11px;color:var(--muted)}
+.score-pill.active{border-color:var(--gold);background:rgba(255,213,74,.12);box-shadow:0 0 0 1px rgba(255,213,74,.15)}
+.score-dot{width:9px;height:9px;border-radius:50%;flex:none}.score-name{max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:700}
+.score-pill b{color:var(--gold);font-size:14px}.score-pill small{font-size:9px}.score-balls{white-space:nowrap}
 #board{min-width:0}
-#field{display:flex;flex-direction:column;gap:10px}
+#field{display:flex;flex-direction:column;gap:10px;container-type:inline-size;container-name:game-field}
 #controls{display:flex;flex-direction:column;gap:14px}
 
 /* desktop / large tablet: board left, controls + log right, players full-width */
-@media (min-width:861px){
+@media (min-width:1000px){
   #game{display:grid;gap:14px;padding:14px;
     grid-template-columns:minmax(0,1fr) 340px;
     grid-template-areas:
@@ -150,10 +164,19 @@ button:disabled{opacity:.45;cursor:not-allowed}
       "players players";}
   #topbar{grid-area:topbar;margin:-14px -14px 0;border-radius:0}
   #board{grid-area:board}
-  #controls{grid-area:controls;position:sticky;top:62px;align-self:start;max-height:calc(100svh - 76px);overflow:auto;overscroll-behavior:contain}
+  #controls{grid-area:controls;position:sticky;top:62px;align-self:start;max-height:calc(100dvh - 76px);overflow:auto;overscroll-behavior:contain}
   #log{grid-area:log;align-self:start}
   #players{grid-area:players}
-  #inspect{display:none !important}
+  #action-bar{position:sticky;top:0;z-index:4;box-shadow:0 10px 24px rgba(7,9,28,.35)}
+  #score-strip{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;overflow-x:auto;scrollbar-width:none}
+  #score-strip::-webkit-scrollbar{display:none}
+  .topbar-left{display:none}
+  #turn-banner{flex:0 1 280px}
+}
+@media (max-width:520px){
+  .topbar-left{display:none}
+  #topbar{padding-left:max(9px,var(--sa-l));padding-right:max(9px,var(--sa-r))}
+  #turn-banner{padding-inline:10px}
 }
 
 /* field rows */
@@ -232,7 +255,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 @media (hover:hover) and (pointer:fine){ .supply-row:not(.disabled):hover{background:var(--panel2)} }
 
 /* ---------- action bar ---------- */
-#action-bar{min-height:84px}
+#action-bar{min-height:84px;border-color:rgba(255,213,74,.38);background:linear-gradient(145deg,rgba(42,50,112,.96),rgba(27,33,78,.96))}
+body.has-card-selection #action-bar{border-color:var(--gold);box-shadow:0 0 0 1px rgba(255,213,74,.18),0 10px 26px rgba(0,0,0,.28)}
 .act-hint{color:var(--muted);font-size:13px;margin-bottom:8px;line-height:1.5}
 .act-buttons{display:flex;flex-wrap:wrap;gap:8px}
 .act-buttons button{flex:1 1 auto;min-width:96px}
@@ -284,12 +308,14 @@ button:disabled{opacity:.45;cursor:not-allowed}
 #my-resources{display:flex;flex-direction:column;gap:7px}
 .mc-label{font-size:11px;color:var(--muted);font-weight:800;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mychips{display:flex;flex-wrap:wrap;gap:6px}
-.mychip{display:flex;align-items:center;gap:3px;background:#11163a;border:1px solid var(--line);border-radius:16px;padding:3px 9px 3px 4px;font-size:13px;min-height:30px}
-.mychip .mc-tok{font-weight:800;min-width:10px;text-align:center}
-.mychip .mc-bon{color:var(--good);font-weight:800;font-size:12px}
+.mychip{display:grid;grid-template-columns:auto auto;grid-template-rows:1fr 1fr;align-items:center;column-gap:4px;background:#11163a;border:1px solid var(--line);border-radius:13px;padding:3px 8px 3px 4px;font-size:12px;min-height:38px}
+.mychip .ball{grid-row:1/3}
+.mychip .mc-tok,.mychip .mc-bon{display:flex;align-items:baseline;gap:3px;line-height:1.05;font-weight:800;min-width:30px}
+.mychip .mc-tok small,.mychip .mc-bon small{font-size:8px;color:var(--muted);font-weight:700}
+.mychip .mc-bon{color:var(--good);font-size:11px}
+.mychip.master,.mychip.mega{grid-template-rows:1fr}.mychip.master .ball,.mychip.mega .ball{grid-row:auto}.mychip.master .mc-tok,.mychip.mega .mc-tok{font-size:13px}
 
 /* ---------- guided tutorial (新手教程) ---------- */
-.setup-tutorials{margin-top:10px}
 .setup-tutorials button{flex:1 1 auto}
 #tut-mask{position:fixed;z-index:78;border-radius:12px;pointer-events:none;
   box-shadow:0 0 0 3px var(--gold), 0 0 0 9999px rgba(4,6,20,.66);
@@ -298,7 +324,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 #tut-bubble{position:fixed;z-index:80;left:50%;transform:translateX(-50%);
   top:calc(var(--sa-t) + 58px);width:min(440px, calc(100vw - 20px));
   background:var(--bg1);border:1px solid var(--gold);border-radius:16px;
-  padding:14px 16px;box-shadow:0 14px 44px rgba(0,0,0,.55)}
+  padding:14px 16px;box-shadow:0 14px 44px rgba(0,0,0,.55);
+  max-height:calc(100dvh - var(--sa-t) - var(--sa-b) - 18px);overflow:auto;overscroll-behavior:contain}
 #tut-bubble.hidden{display:none}
 #tut-step{font-size:11px;color:var(--muted);font-weight:800;letter-spacing:1.5px;margin-bottom:4px}
 #tut-title{font-size:17px;font-weight:800;color:var(--gold);margin-bottom:6px;line-height:1.3}
@@ -308,6 +335,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 #tut-actions .primary{min-height:44px}
 .tut-hint{font-size:12px;color:var(--muted);flex:1 1 auto}
 .tut-hide-endturn [data-act="end-turn"]{display:none !important}
+body.tutorial-choice-open #choice-modal{z-index:90}
+body.tutorial-choice-open #tut-mask,body.tutorial-choice-open #tut-bubble{visibility:hidden}
 
 /* ---------- rotate-for-landscape hint (dismissible, phones in portrait) ---------- */
 #rotate-hint{margin:6px auto 0;z-index:29;align-self:center;
@@ -343,9 +372,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .ptokens.over{border-color:var(--bad);color:var(--bad);box-shadow:0 0 0 1px var(--bad)}
 .ptokens.over small{color:var(--bad)}
 .pstats{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-.chip{display:flex;align-items:center;gap:4px;background:#11163a;border:1px solid var(--line);border-radius:20px;padding:3px 9px 3px 4px;font-size:13px}
-.chip .num{font-weight:800;min-width:12px;text-align:center}
-.chip .bonus-n{color:var(--good);font-weight:800}
+.chip{display:grid;grid-template-columns:auto auto;grid-template-rows:1fr 1fr;align-items:center;column-gap:4px;background:#11163a;border:1px solid var(--line);border-radius:13px;padding:3px 8px 3px 4px;font-size:11px;min-height:38px}
+.chip .ball{grid-row:1/3}.chip .num,.chip .bonus-n{display:flex;align-items:baseline;gap:3px;line-height:1.05;font-weight:800;min-width:30px}
+.chip .num small,.chip .bonus-n small{font-size:8px;color:var(--muted);font-weight:700}.chip .bonus-n{color:var(--good)}
+.chip.master{display:flex;border-radius:20px;min-height:30px}.chip.master .ball{grid-row:auto}.chip.master .num{min-width:auto;font-size:13px}
 .pcards{display:flex;gap:6px;flex-wrap:wrap}
 .color-stack{position:relative}
 .color-stack .ministack{display:flex;flex-direction:column}
@@ -368,7 +398,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .buried-badge{position:absolute;top:8px;right:10px;font-size:11px;color:var(--muted)}
 
 /* turn passing overlay (hotseat) */
-#pass-overlay{position:fixed;inset:0;background:rgba(6,8,24,.94);z-index:55;display:grid;place-items:center;text-align:center;padding:24px}
+#pass-overlay{position:fixed;inset:0;background:rgba(6,8,24,.96);z-index:95;display:grid;place-items:center;text-align:center;padding:24px}
 #pass-overlay .po-inner{max-width:420px}
 #pass-overlay h2{font-size:clamp(22px,6vw,26px);margin:0 0 6px}
 #pass-overlay p{color:var(--muted)}
@@ -384,15 +414,15 @@ button:disabled{opacity:.45;cursor:not-allowed}
 #zoom img{width:260px;height:347px;object-fit:contain;background:#0c1030;border-radius:14px;border:2px solid var(--gold)}
 
 /* tap-to-inspect overlay (touch) */
-#inspect{position:fixed;inset:0;z-index:85;background:rgba(6,8,24,.86);display:flex;align-items:center;justify-content:center;
-  padding:max(20px,var(--sa-t)) max(20px,var(--sa-r)) max(20px,var(--sa-b)) max(20px,var(--sa-l))}
-#inspect-inner{display:flex;flex-direction:column;align-items:center;gap:16px;max-width:100%}
-#inspect-img{width:min(78vw,340px);height:auto;aspect-ratio:3/4;border-radius:14px;border:3px solid var(--gold);box-shadow:0 18px 50px rgba(0,0,0,.65);background:#0c1030}
+#inspect{position:fixed;inset:0;z-index:85;background:rgba(6,8,24,.9);display:flex;align-items:flex-start;justify-content:center;overflow:auto;overscroll-behavior:contain;
+  padding:max(16px,var(--sa-t)) max(16px,var(--sa-r)) max(16px,var(--sa-b)) max(16px,var(--sa-l))}
+#inspect-inner{display:flex;flex-direction:column;align-items:center;gap:14px;max-width:100%;margin:auto}
+#inspect-img{width:auto;height:auto;max-width:min(88vw,390px);max-height:calc(100dvh - 110px);object-fit:contain;border-radius:14px;border:3px solid var(--gold);box-shadow:0 18px 50px rgba(0,0,0,.65);background:#0c1030}
 #inspect-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 #inspect-actions button{padding:13px 22px;font-size:15px;min-height:48px}
 
 /* global feedback stays visible even when the setup/lobby screen is active */
-.toast{position:fixed;z-index:120;left:50%;bottom:calc(22px + var(--sa-b));transform:translateX(-50%);width:max-content;max-width:min(520px,calc(100vw - 28px));padding:11px 15px;border-radius:12px;background:#171c44;border:1px solid var(--line);box-shadow:0 12px 34px rgba(0,0,0,.55);font-size:13px;font-weight:700;line-height:1.45;text-align:center}
+.toast{position:fixed;z-index:120;left:50%;bottom:calc(22px + var(--sa-b));transform:translateX(-50%);width:max-content;max-width:min(520px,calc(100vw - 28px));padding:11px 15px;border-radius:12px;background:#171c44;border:1px solid var(--line);box-shadow:0 12px 34px rgba(0,0,0,.55);font-size:13px;font-weight:700;line-height:1.45;text-align:center;pointer-events:none}
 .toast.error{border-color:var(--bad);color:#ffd9dd}.toast.success{border-color:var(--good);color:#baf7d2}
 
 /* win modal */
@@ -409,8 +439,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 /* ============================================================
    MOBILE / NARROW: single column + fixed bottom control dock
    ============================================================ */
-@media (max-width:860px){
+@media (max-width:999px){
   #game{display:flex;flex-direction:column;min-height:var(--app-h);padding-bottom:calc(var(--dock-h) + var(--sa-b) + 6px)}
+  #zoom{display:none !important}
   #board{order:1;padding:8px max(6px,var(--sa-r)) 0 max(6px,var(--sa-l))}
   #players{order:2;padding:10px max(8px,var(--sa-r)) 12px max(8px,var(--sa-l));grid-auto-flow:row;grid-auto-columns:auto;
     grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
@@ -420,13 +451,14 @@ button:disabled{opacity:.45;cursor:not-allowed}
   #controls{position:fixed;left:0;right:0;bottom:0;z-index:46;order:99;gap:6px;
     padding:6px max(8px,var(--sa-l)) calc(6px + var(--sa-b)) max(8px,var(--sa-r));
     background:rgba(10,13,40,.96);backdrop-filter:blur(10px);border-top:1px solid var(--line);
-    box-shadow:0 -8px 24px rgba(0,0,0,.4);max-height:54svh;overflow:auto}
+    box-shadow:0 -8px 24px rgba(0,0,0,.4);max-height:56svh;max-height:56dvh;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
   #controls .panel{padding:8px;border-radius:12px}
 
   /* supply as a compact horizontal strip of tappable ball-chips */
-  #supply{flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;overflow-y:hidden;padding:6px;
+  #supply{order:1;flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;overflow-y:hidden;padding:6px;
     scroll-snap-type:x proximity;overscroll-behavior-x:contain}
-  #supply::-webkit-scrollbar{height:0}
+  #supply::-webkit-scrollbar,.tier-row::-webkit-scrollbar{height:3px}
+  #supply::-webkit-scrollbar-thumb,.tier-row::-webkit-scrollbar-thumb{background:var(--line);border-radius:999px}
   #supply .panel-title{display:none}
   .supply-row{flex:0 0 auto;flex-direction:column;gap:1px;padding:5px 8px;min-width:50px;min-height:58px;justify-content:center;text-align:center;scroll-snap-align:start}
   .supply-row .name{display:none}
@@ -436,8 +468,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
   .act-hint{margin-bottom:6px}
 
   /* your-resources: single compact horizontal scroll row in the dock */
-  #my-resources{flex-direction:row;align-items:center;gap:8px;overflow-x:auto;overflow-y:hidden;padding:6px 8px}
-  #my-resources::-webkit-scrollbar{height:0}
+  #my-resources{order:2;flex-direction:row;align-items:center;gap:8px;overflow-x:auto;overflow-y:hidden;padding:6px 8px}
+  #my-resources::-webkit-scrollbar{height:3px}
+  #my-resources::-webkit-scrollbar-thumb{background:var(--line);border-radius:999px}
   .mc-label{flex:0 0 auto;font-size:10px}
   .mychips{flex-wrap:nowrap}
   .mychip{flex:0 0 auto}
@@ -445,7 +478,6 @@ button:disabled{opacity:.45;cursor:not-allowed}
   /* board rows scroll horizontally instead of wrapping */
   .tier-row{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:8px;padding:6px;
     scroll-snap-type:x proximity;overscroll-behavior-x:contain}
-  .tier-row::-webkit-scrollbar{height:0}
   .tier-label{position:sticky;left:0;z-index:2;writing-mode:horizontal-tb;text-orientation:mixed;width:auto;letter-spacing:1px;
     padding:2px 6px;border-radius:8px;background:var(--panel);align-self:stretch;display:flex;align-items:center}
   .card-strip{flex-wrap:nowrap}
@@ -455,6 +487,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
   body.has-card-selection #supply,body.has-card-selection #my-resources{display:none !important}
   body.has-card-selection #action-bar .act-buttons{position:sticky;bottom:-8px;z-index:3;margin:8px -8px -8px;padding:12px 8px 8px;background:linear-gradient(transparent,rgba(29,35,80,.98) 24%)}
   body.has-card-selection .pay-ledger{max-height:132px;overflow:auto}
+  .toast{top:calc(var(--sa-t) + 58px);bottom:auto}
 }
 
 /* very small phones: shrink cards a touch more, 1 player per row */
@@ -464,9 +497,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
 }
 
 /* landscape phone: keep the dock but allow wider rows */
-@media (max-width:860px) and (orientation:landscape){
-  #controls{max-height:62svh}
+@media (max-width:999px) and (orientation:landscape){
+  #controls{max-height:64svh;max-height:64dvh}
   #players{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+  #inspect-img{max-height:calc(100dvh - 92px);max-width:74vw}
+  #inspect-inner{flex-direction:row;align-items:center}
+  #inspect-actions{flex-direction:column;min-width:120px}
 }
 
 /* accessibility: respect reduced-motion */
@@ -491,14 +527,14 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .fly-card[data-tier="pmL2"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-2.png)}
 .fly-card[data-tier="pmL3"]{background-image:linear-gradient(rgba(8,10,30,.12),rgba(8,10,30,.28)),url(../assets/backs/pokemart-3.png)}
 @keyframes recv{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
-.player.receiving{animation:recv .5s ease}
+.player.receiving,.score-pill.receiving,#turn-banner.receiving,#my-resources.receiving{animation:recv .5s ease}
 
 /* ---------- undo (悔棋) button ---------- */
 #undo-btn{position:fixed;bottom:calc(14px + var(--sa-b));left:calc(14px + var(--sa-l));z-index:40;background:linear-gradient(180deg,#3a4290,#2a3170);color:#fff;border:1px solid var(--line);box-shadow:var(--shadow);font-weight:700;padding:11px 16px;border-radius:12px;min-height:46px}
 #undo-btn .ti,#undo-btn i{margin-right:4px}
 @media (hover:hover) and (pointer:fine){ #undo-btn:hover{filter:brightness(1.1)} }
 /* mobile: lift the undo button above the fixed bottom dock (placed after the base rule so it wins source-order) */
-@media (max-width:860px){ #undo-btn{bottom:calc(var(--dock-h) + var(--sa-b) + 10px)} }
+@media (max-width:999px){ #undo-btn{bottom:calc(var(--dock-h) + var(--sa-b) + 10px)} }
 
 /* ===== PokéMart expansion ===== */
 .pokemart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0 8px;padding:12px 15px;border:1px solid rgba(75,211,153,.32);border-radius:16px;background:linear-gradient(110deg,rgba(24,111,77,.42),rgba(29,65,116,.24));box-shadow:inset 0 1px rgba(255,255,255,.06)}
@@ -522,6 +558,19 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .choice-card:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .choice-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
 .choice-confirm:disabled,#choice-confirm:disabled{opacity:.4;cursor:not-allowed}
-@media(max-width:640px){.pokemart-head{align-items:flex-start}.pokemart-legend{white-space:normal;justify-content:flex-end;flex-wrap:wrap}.choice-card{width:88px}.choice-meta{flex-direction:column}.choice-actions{position:sticky;bottom:-18px;background:linear-gradient(transparent,var(--bg1) 25%);padding-top:18px}.choice-actions button{min-height:46px;flex:1}}
-@media(min-width:1200px){.pokemart-grid{--card-w:84px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.pokemart-grid .tier-pokemart{min-width:0;gap:7px;padding:7px}.pokemart-grid .tier-label{writing-mode:horizontal-tb;text-orientation:mixed;width:38px;letter-spacing:0;align-self:stretch;align-items:center;justify-content:center}.pokemart-grid .card-strip{flex-wrap:nowrap;gap:6px}}
-@media(max-width:1199px){.pokemart-grid{display:flex;flex-direction:column;gap:10px}}
+@media(max-width:640px){
+  .pokemart-head{align-items:flex-start}.pokemart-legend{white-space:normal;justify-content:flex-end;flex-wrap:wrap}
+  .choice-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;justify-items:stretch}
+  .choice-card{width:auto;min-width:0}.choice-card span{font-size:12px;color:var(--ink)}.choice-card small{font-size:10px;white-space:normal}
+  .choice-meta{flex-direction:column}.choice-actions{position:sticky;bottom:-18px;background:linear-gradient(transparent,var(--bg1) 25%);padding-top:18px}.choice-actions button{min-height:46px;flex:1}
+}
+.pokemart-grid{display:flex;flex-direction:column;gap:10px}
+@container game-field (min-width:700px){
+  .pokemart-grid{--card-w:84px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .pokemart-grid .tier-pokemart{min-width:0;gap:7px;padding:7px}
+  .pokemart-grid .tier-label{writing-mode:horizontal-tb;text-orientation:mixed;width:38px;letter-spacing:0;align-self:stretch;align-items:center;justify-content:center}
+  .pokemart-grid .card-strip{flex-wrap:nowrap;gap:6px}
+}
+@container game-field (min-width:1040px){
+  .pokemart-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}

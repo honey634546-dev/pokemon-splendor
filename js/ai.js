@@ -42,6 +42,12 @@
     tok1: 0.92, tok2: 0.357, tokPen: 1.514, purple: 1.969, reserve: 0.572,
     prox: 8.617, prox2: 0.435, proxBonus: 1.418, proxEvo: 0.586, rlProxE: 5.655, rlProxL: 3.161, gapDiv: 1.417,
     evo: 6.211, denyMul: 1.023,
+    // --- expansion terms (hand-set, A/B-validated; only active when the expansion is on) ---
+    megaTok: 14,    // holding the Mega token (max 1; required for the Megas win)
+    megaCover: 5,   // per colour with ≥1 bonus (the win needs ALL five colours)
+    megaOwn: 18,    // owning ≥1 Mega in play (win requirement, beyond its VP)
+    megaProx: 9,    // proximity to an achievable Mega on offer (base owned)
+    pokedex: 3,     // each held POKÉDEX ≈ 2 bankable wildcard balls
   };
   let W = Object.assign({}, DEFAULT_W);
   const ROUTE_PAIRS = [
@@ -59,7 +65,8 @@
     let score = 0;
 
     score += vp * 100;                                   // VP is king (fixed anchor scale)
-    if (vp >= 11) score += (vp - 11) * W.vpEnd;          // endgame push
+    const winVP = s.megasEnabled ? 20 : (s.winScore || 18);
+    if (vp >= winVP - 7) score += (vp - (winVP - 7)) * W.vpEnd;   // endgame push, relative to the real target
     if (s.lastRound) score += vp * W.lastRound;          // race hard once final round is on
 
     // engine: owned bonus cards + total discount power are highly valued so
@@ -84,17 +91,6 @@
     score += Math.min(distinct, 2) * W.distinct;
     if (bvals[0] > 5) score -= (bvals[0] - 5) * W.overstack;   // mild anti-overstack
 
-    // Mega games have a conjunctive victory condition: raw VP alone is useless
-    // without all five bonus colours and a Mega in play.  Treat the required
-    // Mega as a strategic objective worth a little over two VP, and progressively
-    // value colour coverage once the engine is established.  Without this term a
-    // superficially sensible VP maximiser can reach 25+ points yet never finish.
-    if (s.megasEnabled) {
-      const hasMega = p.board.some(id => s.byId[id].tier === 'mega');
-      if (hasMega) score += 260;
-      score += Math.max(0, distinct - 2) * (vp >= 12 ? 30 : 12);
-    }
-
     // tokens: concave value with a real anti-hoard penalty past 8 so the AI
     // converts tokens into cards instead of sitting at the 10 limit.
     const toks = E.tokenTotal(p);
@@ -110,7 +106,7 @@
     // balls toward a high-VP target instead of grabbing 0-VP junk.
     const early = s.round <= 6;
     const targets = [];
-    for (const tier of actionTiers(s)) for (const id of s.field[tier]) if (id) targets.push(id);
+    for (const tier of E.fieldTiers(s)) for (const id of s.field[tier]) if (id) targets.push(id); // incl. Pokémart rows
     for (const id of p.reserve) targets.push(id);
     let bestProx = 0, prox2 = 0;
     for (const id of targets) {
@@ -118,10 +114,19 @@
       // evolved potential: a cheap card (御五家 3-2) that evolves into VP is worth reaching for
       let evoVP = 0;
       if (card.evolvesTo) { const t = DBfind(s, card.evolvesTo); if (t) evoVP = Math.max(0, t.vp - (card.vp || 0)); }
-      if (!card.vp && card.tier !== 'rare' && evoVP <= 0) continue;
+      // Pokémart effect worth (the card's ability, beyond VP/bonus)
+      let effW = 0;
+      if (E.isPokemart(card) && card.effect) {
+        if (card.effect === 'discard_buy') continue;          // paid with cards, not balls — not a token target
+        effW = card.effect === 'colorless_master' ? 2 * W.purple   // 图鉴 = 2 bankable wildcards
+             : card.effect === 'free' ? 2                          // 技能机 free take
+             : card.effect === 'copy_free' ? 2.5                   // 神奇糖果 assoc + free take
+             : card.effect === 'copy' ? 1 : 1;                     // 进化石 / 药水
+      }
+      if (!card.vp && card.tier !== 'rare' && evoVP <= 0 && effW <= 0) continue;
       let gap = card.cost.purple || 0;
       for (const c of COLORS) gap += Math.max(0, (card.cost[c] || 0) - b[c] - p.tokens[c]);
-      let worth = (card.vp || 0) + (card.bonusCount || 1) * W.proxBonus + evoVP * W.proxEvo;
+      let worth = (card.vp || 0) + (card.bonusCount || 1) * W.proxBonus + evoVP * W.proxEvo + effW;
       if (card.tier === 'rare' || card.tier === 'legend') worth += early ? W.rlProxE : W.rlProxL; // engine anchor, esp. early
       const v = worth / (1 + gap * W.gapDiv);
       if (v > bestProx) { prox2 = bestProx; bestProx = v; } else if (v > prox2) prox2 = v;
@@ -174,6 +179,41 @@
     for (let i = 0; i < evoQueue.length; i++) {
       const queueWeight = cfg && cfg.queueAware && !s.megasEnabled ? Math.pow(0.55, i) : 1;
       score += evoQueue[i] * queueWeight;
+    }
+
+    // --- Pokémart: held POKÉDEX cards are 2 bankable wildcards each ---
+    if (s.pokemartEnabled) {
+      let dex = 0;
+      for (const id of p.board) { const c = s.byId[id]; if (E.isPokemart(c) && c.effect === 'colorless_master') dex++; }
+      score += dex * W.pokedex;
+    }
+
+    // --- Megas: the WIN CONDITION changes (20 VP + ≥1 bonus of EVERY colour +
+    // ≥1 Mega in play; unqualified players cannot win at all). Value the pieces. ---
+    if (s.megasEnabled) {
+      const ownMega = p.board.some(id => s.byId[id].tier === 'mega');
+      let covered = 0;
+      for (const c of COLORS) if (b[c] > 0) covered++;
+      score += (p.megaToken || 0) * W.megaTok;
+      score += covered * W.megaCover;
+      if (ownMega) score += W.megaOwn;
+      // proximity to an achievable Mega on offer (we own its base Pokémon)
+      let mp = 0;
+      for (const mid of (s.megaOffer || [])) {
+        const m = s.byId[mid];
+        let baseVp = -1;
+        for (const id of p.board) { const c = s.byId[id]; if (c.name === m.megaFrom) { baseVp = c.vp || 0; break; } }
+        if (baseVp < 0) continue;
+        let gap = 0;
+        for (const c of COLORS) gap += Math.max(0, (m.cost[c] || 0) - b[c] - p.tokens[c]);
+        if (p.megaToken < 1) gap += 2;                    // still need the token ≈ a full turn away
+        const worth = Math.max(0, (m.vp || 0) - baseVp) + (m.bonusCount || 1) + 4; // +4: win-critical piece
+        const v = worth / (1 + gap * W.gapDiv);
+        if (v > mp) mp = v;
+      }
+      score += mp * W.megaProx;
+      // last-round reality check: only a QUALIFIED player can win under Megas
+      if (s.lastRound && vp >= 20 && covered === 5 && ownMega) score += W.lastRound * 6;
     }
 
     if (cfg && cfg.noise) score += (E._noise ? E._noise() : 0) * cfg.noise;
@@ -340,26 +380,13 @@
     }
     return best;
   }
-  function bestMegaEvolution(s, pid, cfg) {
-    if (!s.megasEnabled) return null;
-    const opts = E.megaEvolveOptions(s, s.players[pid]);
-    if (!opts.length) return null;
-    const base = evalState(s, pid, null);
-    let best = null, bestScore = base;
-    for (const o of opts) {
-      const c = E.clone(s), r = E.actionMegaEvolve(c, o.megaId, o.fromId);
-      if (!r.ok) continue;
-      const sc = evalState(c, pid, null) + (cfg ? cfg.evoBias : 1) * 12;
-      if (sc > bestScore) { bestScore = sc; best = o; }
-    }
-    return best;
-  }
-
   // score a full line: state already has the main action applied; manage
   // discards + evolution on a clone and return the resulting eval.
   function scoreLine(s, pid, cfg) {
     const c = E.clone(s);
+    const neededFirstMega = c.megasEnabled && !c.players[pid].board.some(id => c.byId[id].tier === 'mega');
     manage(c, cfg);
+    const completedFirstMega = neededFirstMega && c.players[pid].board.some(id => c.byId[id].tier === 'mega');
     const triggered = winningPosition(c, c.players[pid]);
     const r = E.endTurn(c);
     let score = evalState(c, pid, cfg);
@@ -367,6 +394,11 @@
     // different from merely gaining more VP.  This is especially important in
     // Mega mode, where 30 points without a Mega still cannot end the game.
     if (triggered) score += 100000;
+    // `manage` treats the first Mega as a contested, binary qualification
+    // objective. Mirror that priority in root scoring so a setup action that
+    // unlocks the first Mega is not rejected merely because it spends/buries
+    // more material than an ordinary capture.
+    if (completedFirstMega) score += 10000;
     if (r && r.gameover) score += c.winner === pid ? 1000000 : -1000000;
     // Once the final round has begun, merely crossing the trigger no longer
     // ends the game early.  Avoid paying a large tactical penalty for a threat
@@ -376,8 +408,25 @@
     return score;
   }
 
+  // ---- best end-of-turn MEGA evolution (Megas expansion; shares the one
+  // evolution-per-turn slot with normal evolution — manage() picks the better).
+  function bestMegaEvolution(s, pid, cfg) {
+    if (!s.megasEnabled) return null;
+    const opts = E.megaEvolveOptions(s, s.players[pid]);
+    if (!opts.length) return null;
+    let best = null, bestScore = -Infinity;
+    for (const o of opts) {
+      const c = E.clone(s);
+      const r = E.actionMegaEvolve(c, o.megaId, o.fromId);
+      if (!r.ok) continue;
+      const sc = evalState(c, pid, null) + (cfg ? cfg.evoBias : 1) * 8;
+      if (sc > bestScore) { bestScore = sc; best = o; }
+    }
+    return best ? { opt: best, score: bestScore } : null;
+  }
+
   // perform end-of-turn management (discard to 10, then best evolution) on `s`.
-  // returns { discards, evolution, megaEvolution }
+  // returns { discards:[color], evolution:{fromId,toId}|null, megaEvolution:{megaId,fromId}|null }
   function manage(s, cfg) {
     const pid = s.turn;
     const p = s.players[pid];
@@ -396,21 +445,26 @@
       if (bestColor == null) break;
       E.actionDiscard(s, bestColor); plan.discards.push(bestColor);
     }
-    const evo = bestEvolution(s, pid, cfg), mega = bestMegaEvolution(s, pid, cfg);
-    let normalScore = -Infinity, megaScore = -Infinity;
-    if (evo) { const c = E.clone(s); E.actionEvolve(c, evo.fromId, evo.toId); normalScore = evalState(c, pid, cfg); }
-    let megaWins = false;
+    // one evolution per turn: normal vs MEGA. The FIRST Mega is a hard priority:
+    // it is a win-condition requirement and the offer is contested — a greedy
+    // per-turn eval keeps deferring it (pays balls now, buries the base) and ends
+    // up out-scoring yet UNQUALIFIED. Once a Mega is owned, compare by eval.
+    const evo = bestEvolution(s, pid, cfg);
+    const mega = bestMegaEvolution(s, pid, cfg);
+    let useMega = false;
     if (mega) {
-      const c = E.clone(s); E.actionMegaEvolve(c, mega.megaId, mega.fromId);
-      megaWins = winningPosition(c, c.players[pid]);
-      megaScore = evalState(c, pid, cfg) + 8 + (megaWins ? 100000 : 0);
+      const ownsMega = p.board.some(id => s.byId[id].tier === 'mega');
+      if (!ownsMega || !evo) useMega = true;
+      else {
+        const c = E.clone(s); E.actionEvolve(c, evo.fromId, evo.toId);
+        useMega = mega.score > evalState(c, pid, null) + (cfg ? cfg.evoBias : 1) * 8;
+      }
     }
-    if (mega && megaScore >= normalScore) {
-      E.actionMegaEvolve(s, mega.megaId, mega.fromId);
-      plan.megaEvolution = { megaId: mega.megaId, fromId: mega.fromId };
+    if (useMega) {
+      E.actionMegaEvolve(s, mega.opt.megaId, mega.opt.fromId);
+      plan.megaEvolution = { megaId: mega.opt.megaId, fromId: mega.opt.fromId };
     } else if (evo) {
-      E.actionEvolve(s, evo.fromId, evo.toId);
-      plan.evolution = { fromId: evo.fromId, toId: evo.toId };
+      E.actionEvolve(s, evo.fromId, evo.toId); plan.evolution = { fromId: evo.fromId, toId: evo.toId };
     }
     return plan;
   }
@@ -424,7 +478,7 @@
     }
     const mega = bestMegaEvolution(s, pid, cfg);
     if (mega) {
-      const c = E.clone(s); E.actionMegaEvolve(c, mega.megaId, mega.fromId);
+      const c = E.clone(s); E.actionMegaEvolve(c, mega.opt.megaId, mega.opt.fromId);
       best = Math.max(best, evalState(c, pid, cfg) + (winningPosition(c, c.players[pid]) ? 100000 : 0));
     }
     return best;
@@ -553,10 +607,33 @@
     let seed = (s.round * 131 + s.turn * 17 + acts.length * 7) >>> 0;
     E._noise = () => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed / 4294967296) - 0.5; };
 
+    // Mega discipline (1-ply only; the deep search handles this via lookahead):
+    // qualification is BINARY — without a Mega you cannot win at all, and the offer
+    // is contested. A greedy eval always prefers "one more capture" and defers the
+    // Mega forever, so the FIRST Mega is an OVERRIDE, not an eval competitor:
+    // the moment a Mega we own the base of is affordable, spend the turn on the
+    // token (manage() then mega-evolves the same turn). Mirrors the policy that
+    // play-tested strongest; further Megas compete on eval like everything else.
+    const pMe = s.players[pid];
+    if (s.megasEnabled && !pMe.board.some(id => s.byId[id].tier === 'mega')) {
+      const tokenAct = acts.find(a => a.type === 'takeMega');
+      if (tokenAct) {
+        for (const mid of (s.megaOffer || [])) {
+          const m = s.byId[mid];
+          if (pMe.board.some(id => s.byId[id].name === m.megaFrom) && E.canAfford(s, pMe, m)) {
+            E._noise = null;
+            const c0 = E.clone(s); E.applyAction(c0, tokenAct);
+            const mp0 = manage(c0, cfg);
+            return { action: tokenAct, discards: mp0.discards, evolution: mp0.evolution, megaEvolution: mp0.megaEvolution };
+          }
+        }
+      }
+    }
     const views = [], beliefCount = opts.beliefs != null ? opts.beliefs : cfg.beliefs;
     for (let i = 0; i < Math.max(1, beliefCount || 1); i++) views.push(beliefState(s, pid, i + 1));
     let best = null, bestScore = -Infinity;
     for (const a of acts) {
+      if (a.type === 'takeMega') continue;   // token-taking is handled by the override above
       let total = 0, valid = true;
       for (const view of views) {
         const c = E.clone(view);
