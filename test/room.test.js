@@ -249,5 +249,15 @@ test('state broadcast carries turnStartedAt / serverNow / turnTimeoutMs for the 
   assert.ok(s.turnTimeoutMs > 0, 'a turn timeout is advertised');
 });
 
+test('stale connection close cannot mark a newer token-reclaimed seat offline', () => {
+  const { room, last } = makeRoom();
+  room.onMessage('old', { t: 'join', name: 'A', token: 'tA' });
+  room.onMessage('new', { t: 'join', name: 'A', token: 'tA' });
+  room.leave('old');
+  assert.strictEqual(room.seats[0].connected, true);
+  assert.strictEqual(room.seats[0].connId, 'new');
+  assert.strictEqual(last('new', 'roster').players[0].connected, true);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

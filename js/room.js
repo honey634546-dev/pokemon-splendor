@@ -90,6 +90,12 @@
       }
       if (seat >= 0) {
         const st = this.seats[seat];
+        // A refreshed browser may reclaim a seat before the old socket has
+        // delivered its close event. Demote the old connection so its later
+        // close cannot mark the new connection offline or retain ownership.
+        if (st.connId && st.connId !== connId && this.conns[st.connId] != null) {
+          this.conns[st.connId] = -1;
+        }
         st.token = token || st.token || ('seat' + seat);
         st.connId = connId;
         st.name = name || st.name || ('训练家 ' + (seat + 1));
@@ -107,8 +113,12 @@
     leave(connId) {
       const seat = this.conns[connId];
       if (seat != null && seat >= 0 && this.seats[seat]) {
-        this.seats[seat].connected = false;
-        this.seats[seat].connId = null;                         // keep token → seat reclaimable
+        // Ignore a stale socket closing after a newer connection reclaimed
+        // the same token/seat.
+        if (this.seats[seat].connId === connId) {
+          this.seats[seat].connected = false;
+          this.seats[seat].connId = null;                       // keep token → seat reclaimable
+        }
       }
       delete this.conns[connId];
       this._roster();

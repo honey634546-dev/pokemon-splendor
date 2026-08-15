@@ -1,0 +1,22 @@
+[Unit]
+Description=Pokemon Splendor ECS WebSocket server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/pokemon-splendor
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+Environment=ROOM_DATA_DIR=/var/lib/pokemon-splendor/rooms
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/pokemon-splendor/rooms
+
+[Install]
+WantedBy=multi-user.target

@@ -11,3 +11,6 @@ assets/policy.json
 !.dev.vars.example
 .env*
 !.env.example
+
+# ECS runtime room snapshots
+.runtime/

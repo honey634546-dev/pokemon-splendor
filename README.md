@@ -82,6 +82,7 @@ node test/pokemart.test.js # Pokémart 商店扩展
 
 - **纯静态**（单机热座 + AI）：任意静态托管即可（如 GitHub Pages），双击 `index.html` 同款。
 - **含联机**：用 Cloudflare Workers 部署（`npx wrangler deploy`）。`wrangler.jsonc` 已配置 ASSETS 静态资源绑定、`Room` Durable Object 与自定义域名；Worker 把 `/room/:code/ws` 路由到对应房间的 DO，其余路径回退静态资源。
+- **阿里云 ECS**：使用 Node.js WebSocket 适配层 + Nginx 反向代理部署，支持联机、token 重连与房间快照恢复。详见 [`docs/ECS_DEPLOY.md`](docs/ECS_DEPLOY.md)；服务端入口为 `server/index.js`。
 
 ## 致谢
 
