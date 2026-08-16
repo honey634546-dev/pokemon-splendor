@@ -10,7 +10,7 @@
 cd /var/www/pokemon-splendor
 npm ci
 sudo mkdir -p /var/lib/pokemon-splendor/rooms
-sudo chown -R www-data:www-data /var/lib/pokemon-splendor
+sudo chown -R nginx:nginx /var/lib/pokemon-splendor
 ```
 
 先直接检查服务：
@@ -24,7 +24,7 @@ curl http://127.0.0.1:8787/healthz
 
 ## 2. 配置 systemd
 
-将 `deploy/systemd/pokemon-splendor.service` 复制到 `/etc/systemd/system/`。如果 `which node` 不是 `/usr/bin/node`，修改 `ExecStart` 使用实际路径：
+将 `deploy/systemd/pokemon-splendor.service` 复制到 `/etc/systemd/system/`。如果 `which node` 与服务文件中的路径不同，修改 `ExecStart` 使用实际路径：
 
 ```bash
 sudo systemctl daemon-reload
