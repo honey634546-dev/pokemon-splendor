@@ -2,21 +2,24 @@
 
 ## Project Structure & Module Organization
 
-This is a static browser game with no bundler or application build step.
+This is a static browser game plus a small Node.js WebSocket service; the browser client has no bundler or application build step.
 
 - `index.html`, `css/`, `assets/`, `manifest.json`, and `sw.js` comprise the web/PWA client.
 - `js/engine.js` is the browser/Node rules engine; `ai.js`, `vsearch.js`, and `ai.worker.js` implement computer play. `ui.js`, `tutorial.js`, and `net.js` handle UI, onboarding, and transport.
 - `js/room.js` is the transport-agnostic, server-authoritative online-room layer; `worker/index.js` adapts it to a Cloudflare Durable Object.
+- `server/` adapts `js/room.js` to an ECS-hosted Node.js WebSocket service; `deploy/` contains Nginx and systemd examples.
 - `data/` contains card databases; `assets/` contains card art and media. Treat generated `js/cards.js` as read-only.
 - `test/` contains executable Node regression tests. `train/` contains optional Python AI training; `docs/` contains design notes.
 
 ## Build, Test, and Development Commands
 
-Run commands from the repository root; there is no `package.json`-based build.
+Run commands from the repository root. There is no browser bundler build; the Node service uses the npm scripts below.
 
 ```bash
+npm ci                          # install the WebSocket server dependency
+npm start                       # run the ECS WebSocket service on 127.0.0.1:8787
+npm test                        # run all Node regression suites
 python -m http.server 8000       # serve at http://localhost:8000
-for f in test/*.test.js; do node "$f"; done  # run all regression suites
 npx wrangler dev                  # local Worker/Durable Object development
 npx wrangler deploy               # deploy static assets and online rooms
 ```
